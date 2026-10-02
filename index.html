@@ -1,0 +1,1819 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>BoP Vector Map Editor</title>
+<meta name="theme-color" content="#0e0f13">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<style>
+:root{
+  --bg:#0e0f13; --panel:#171920; --panel2:#1f222b; --line:#2c303b; --text:#e6e8ee; --dim:#8b91a1;
+  --accent:#4da3ff; --ok:#5ec27a; --warn:#ffb84d; --danger:#ff6b6b;
+  --safe-t:env(safe-area-inset-top,0px); --safe-b:env(safe-area-inset-bottom,0px);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:14px/1.35 system-ui,"Segoe UI",Roboto,sans-serif;overflow:hidden;overscroll-behavior:none}
+button,input,select{font:inherit;color:inherit}
+button{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 10px;cursor:pointer}
+button:hover{border-color:#44495a}
+button:active{background:#2a2e3a}
+button.on{background:var(--accent);border-color:var(--accent);color:#06121f}
+button.danger{color:var(--danger)}
+button:disabled{opacity:.35;cursor:default}
+input[type=text],input[type=number],select{background:#0f1117;border:1px solid var(--line);border-radius:7px;padding:6px 8px;width:100%;min-width:0}
+input[type=color]{width:38px;height:32px;padding:2px;background:#0f1117;border:1px solid var(--line);border-radius:7px;flex:none}
+[hidden]{display:none!important}
+
+/* ---------- accueil ---------- */
+#home{position:absolute;inset:0;overflow:auto;padding:calc(20px + var(--safe-t)) 20px 40px}
+#home h1{margin:0 0 4px;font-size:22px}
+#home .sub{color:var(--dim);margin-bottom:18px}
+#projects{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
+.card{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;cursor:pointer;min-height:150px;display:flex;flex-direction:column}
+.card:hover{border-color:var(--accent)}
+.card img{width:100%;aspect-ratio:2/1;object-fit:cover;background:#0b1a2b;display:block}
+.card .meta{padding:8px 10px}
+.card .meta b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .meta span{color:var(--dim);font-size:12px}
+.card .x{position:absolute;top:6px;right:6px;padding:0 8px;font-size:16px;line-height:24px;background:#000a;border-color:#0000}
+.card.new{align-items:center;justify-content:center;text-align:center;gap:6px;padding:14px;border-style:dashed;color:var(--dim)}
+.card.new .plus{font-size:34px;color:var(--accent);line-height:1}
+.card.new b{color:var(--text)}
+
+/* ---------- éditeur ---------- */
+#editor{position:absolute;inset:0}
+#cv{position:absolute;inset:0;width:100%;height:100%;touch-action:none;display:block;background:#0b1a2b}
+#top{position:absolute;left:0;right:0;top:0;display:flex;gap:8px;align-items:center;padding:calc(6px + var(--safe-t)) 8px 6px;background:linear-gradient(#0e0f13ee,#0e0f13bb);border-bottom:1px solid var(--line);flex-wrap:wrap;z-index:5}
+#top .title{width:170px;flex:none}
+.seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{border:0;border-radius:0;border-right:1px solid var(--line)}
+.seg button:last-child{border-right:0}
+#saved{color:var(--dim);font-size:12px;margin-left:auto;white-space:nowrap}
+#tools{position:absolute;left:8px;top:calc(56px + var(--safe-t));display:flex;flex-direction:column;gap:6px;z-index:4}
+#tools button{width:50px;padding:5px 0;display:flex;flex-direction:column;align-items:center;gap:0;background:#171920ee}
+#tools button.on{background:var(--accent);border-color:var(--accent);color:#06121f}
+#tools button i{font-style:normal;font-size:18px;line-height:22px}
+#tools button small{font-size:10px;color:var(--dim)}
+#tools button.on small{color:#06121f}
+#tools hr{width:50px;border:0;border-top:1px solid var(--line);margin:2px 0}
+#panel{position:absolute;right:8px;top:calc(56px + var(--safe-t));width:272px;max-height:calc(100% - 110px - var(--safe-t));overflow:auto;background:#171920f2;border:1px solid var(--line);border-radius:12px;padding:10px;z-index:4}
+#panel h3{margin:0 0 8px;font-size:13px;color:var(--dim);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.row{display:flex;gap:6px;align-items:center;margin-bottom:7px}
+.row label{width:74px;flex:none;color:var(--dim);font-size:12px}
+.row.wrap{flex-wrap:wrap}
+.row button{flex:1}
+.kv{color:var(--dim);font-size:12px;margin-bottom:6px}
+.terr{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+.terr button{display:flex;align-items:center;gap:6px;padding:5px 7px;text-align:left}
+.terr button.on{background:var(--panel2);border-color:var(--accent);color:var(--text);box-shadow:inset 0 0 0 1px var(--accent)}
+.terr b{width:14px;height:14px;border-radius:4px;flex:none;border:1px solid #0006}
+#hint{position:absolute;left:70px;bottom:calc(8px + var(--safe-b));max-width:min(560px,calc(100% - 90px));background:#171920ee;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:var(--dim);font-size:12.5px;z-index:4;pointer-events:none}
+#coords{position:absolute;right:8px;bottom:calc(8px + var(--safe-b));background:#171920ee;border:1px solid var(--line);border-radius:8px;padding:4px 9px;color:var(--dim);font:12px ui-monospace,Consolas,monospace;z-index:4;pointer-events:none}
+#menu{position:absolute;right:8px;top:calc(50px + var(--safe-t));width:250px;background:#171920;border:1px solid var(--line);border-radius:12px;padding:8px;z-index:9;display:flex;flex-direction:column;gap:6px}
+#menu button{text-align:left}
+#menu label{display:flex;gap:8px;align-items:center;color:var(--text);padding:4px 6px}
+#toast{position:fixed;left:50%;bottom:calc(60px + var(--safe-b));transform:translateX(-50%);background:#000d;border:1px solid var(--line);padding:8px 14px;border-radius:10px;z-index:99;max-width:90%;pointer-events:none;opacity:0;transition:opacity .2s}
+#toast.show{opacity:1}
+#busy{position:fixed;inset:0;background:#0e0f13dd;display:flex;align-items:center;justify-content:center;z-index:100;font-size:16px}
+.sw{position:relative;width:170px;flex:none}
+#sres{position:absolute;left:0;top:38px;width:280px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px;z-index:12;max-height:50vh;overflow:auto}
+#sres div{padding:6px 8px;border-radius:6px;cursor:pointer;display:flex;justify-content:space-between;gap:8px}
+#sres div:hover,#sres div.hl{background:var(--panel2)}
+#sres small{color:var(--dim)}
+.bgrow{border:1px solid var(--line);border-radius:8px;padding:6px 6px 0;margin-bottom:6px;cursor:pointer}
+.bgrow.sel{border-color:var(--accent)}
+.bgrow input[type=range],#bgPA{width:100%;accent-color:var(--accent)}
+#dlg{position:fixed;inset:0;background:#000a;z-index:50;display:flex;align-items:center;justify-content:center;padding:16px}
+#dlg .box{background:var(--panel);border:1px solid var(--line);border-radius:14px;width:min(640px,100%);max-height:84vh;display:flex;flex-direction:column}
+#dlg .hd{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line)}
+#dlgBody{padding:10px 14px;overflow:auto}
+#dlgBody details{margin-bottom:8px}
+#dlgBody summary{cursor:pointer;padding:4px 0}
+#dlgBody summary span{display:inline-block;min-width:30px;text-align:center;border-radius:10px;padding:0 7px;margin-right:6px;font-weight:600}
+.bad{background:var(--danger);color:#1b0707}.mid{background:var(--warn);color:#241600}.good{background:var(--ok);color:#06180d}
+.chips{display:flex;flex-wrap:wrap;gap:5px;padding:6px 0 4px 36px}
+.chips button{padding:2px 8px;font-size:12.5px}
+@media (max-width:760px){
+  #panel{right:0;left:0;top:auto;bottom:0;width:auto;max-height:42%;border-radius:12px 12px 0 0}
+  #hint{bottom:calc(44% + 4px)}
+  #coords{display:none}
+  #top .title{width:120px}
+}
+</style>
+</head>
+<body>
+
+<div id="home" hidden>
+  <h1>BoP Vector Map Editor</h1>
+  <div class="sub">Carte vectorielle du monde : découpe les terres en provinces, regroupe-les en pays et régions, exporte des polygones lon/lat.</div>
+  <div id="projects"></div>
+</div>
+
+<div id="editor" hidden>
+  <canvas id="cv"></canvas>
+  <div id="top">
+    <button id="bHome" title="Projets">←</button>
+    <input id="pname" class="title" type="text" aria-label="Nom du projet">
+    <div class="sw"><input id="search" type="text" placeholder="Rechercher ( / )" autocomplete="off"><div id="sres" hidden></div></div>
+    <div class="seg" id="views"></div>
+    <button id="bUndo" title="Annuler (Ctrl+Z)">↶</button>
+    <button id="bRedo" title="Rétablir (Ctrl+Y)">↷</button>
+    <button id="bFit" title="Tout voir (F)">⤢</button>
+    <button id="bMenu" title="Menu">☰</button>
+    <span id="saved"></span>
+  </div>
+  <div id="tools"></div>
+  <div id="panel"></div>
+  <div id="hint"></div>
+  <div id="coords"></div>
+  <div id="menu" hidden></div>
+</div>
+
+<div id="toast"></div>
+<div id="busy" hidden>Chargement…</div>
+<div id="dlg" hidden><div class="box"><div class="hd"><b id="dlgTitle">Bilan et vérifications</b><button id="dlgX">×</button></div><div id="dlgBody"></div></div></div>
+<input id="file" type="file" hidden>
+<input id="imgfile" type="file" accept="image/*" hidden>
+
+<script src="core.js"></script>
+<script src="ne50.js"></script>
+<script>
+'use strict';
+const C = BopCore;
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+/* ===================================================================== données */
+const TERRAINS = [
+  ['plaine', '#7cb05c', 'land'], ['steppe', '#baae56', 'land'], ['forêt', '#286034', 'land'],
+  ['taïga', '#2e6056', 'land'], ['colline', '#b08c58', 'land'], ['montagne', '#887666', 'land'],
+  ['désert', '#eed89c', 'land'], ['marais', '#707e4c', 'land'], ['neige', '#f0f6fc', 'land'],
+  ['glacier', '#a2cce6', 'land'], ['mer', '#26406e', 'sea'], ['infranchissable', '#ff36c4', 'impassable'],
+  ['lac', '#cfe3f2', 'lake'],   // ajouté à la fin : les numéros existants ne bougent jamais
+];
+const NOT_SET = 255;
+const NONE_COLOR = '#3a3e4b';
+
+const S = {
+  id: null, name: '', provs: new Map(), countries: new Map(), regions: new Map(),
+  nextProv: 1, nextCountry: 1, nextRegion: 1,
+  view: 'prov', tool: 'select', sel: 0, actC: 0, actR: 0, pen: 0,
+  overlayCountry: true, labels: false, provAlpha: 1, newKind: 'sea',
+  bg: [], bgSel: -1,
+  cam: { x: 0, y: 15, s: 3 }, undo: [], redo: [], dirty: false,
+};
+const G = { edges: [], geomDirty: true, asgnDirty: true, bProv: null, bCountry: null, bRegion: null, dragB: null };
+
+/* ---------------------------------------------------------------- caches géométrie */
+function pathOf(p) {
+  if (p._path) return p._path;
+  const path = new Path2D();
+  for (const poly of p.polys) for (const r of poly) {
+    path.moveTo(r[0], r[1]);
+    for (let i = 2; i < r.length; i += 2) path.lineTo(r[i], r[i + 1]);
+    path.closePath();
+  }
+  return (p._path = path);
+}
+function bbOf(p) {
+  if (p._bb) return p._bb;
+  const bb = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const poly of p.polys) C.ringBBox(poly[0], bb);
+  return (p._bb = bb);
+}
+function inval(p) { if (p) { p._path = null; p._bb = null; } G.geomDirty = true; G.asgnDirty = true; need(); }
+const disjoint = (a, b) => a[2] < b[0] || a[0] > b[2] || a[3] < b[1] || a[1] > b[3];
+
+/* Arêtes uniques (non orientées) avec les deux provinces qui les bordent.
+   Clé numérique entière (rapide même sur 500 000 arêtes) + vérification exacte. */
+function rebuildEdges() {
+  const map = new Map(), all = [];
+  for (const p of S.provs.values()) for (const poly of p.polys) for (const r of poly) {
+    const n = r.length / 2;
+    for (let k = 0; k < n; k++) {
+      const x1 = r[2 * k], y1 = r[2 * k + 1], j = (k + 1) % n, x2 = r[2 * j], y2 = r[2 * j + 1];
+      let a = Math.round(x1 * 1e7), b = Math.round(y1 * 1e7), c = Math.round(x2 * 1e7), d = Math.round(y2 * 1e7);
+      if (a > c || (a === c && b > d)) { let t = a; a = c; c = t; t = b; b = d; d = t; }
+      let h = Math.imul(a, 0x9E3779B1) ^ Math.imul(b, 0x85EBCA6B) ^ Math.imul(c, 0xC2B2AE35) ^ Math.imul(d, 0x27D4EB2F);
+      h ^= h >>> 15;
+      const bucket = map.get(h);
+      let e = null;
+      if (bucket) {
+        for (let q = 0; q < bucket.length; q++) { const f = bucket[q]; if (f.ia === a && f.ib === b && f.ic === c && f.id === d) { e = f; break; } }
+      }
+      if (!e) {
+        e = { x1, y1, x2, y2, a: p.id, b: 0, n: 1, ia: a, ib: b, ic: c, id: d };
+        all.push(e);
+        if (bucket) bucket.push(e); else map.set(h, [e]);
+      } else { e.n++; if (e.b === 0) e.b = p.id; }
+    }
+  }
+  G.edges = all;
+  G.geomDirty = false;
+  G.asgnDirty = true;
+}
+function rebuildBorders() {
+  const pr = new Path2D(), co = new Path2D(), re = new Path2D();
+  for (const e of G.edges) {
+    if (e.a === e.b) continue;
+    pr.moveTo(e.x1, e.y1); pr.lineTo(e.x2, e.y2);
+    if (!e.b) continue;
+    const A = S.provs.get(e.a), B = S.provs.get(e.b);
+    if (!A || !B) continue;
+    if (A.country !== B.country) { co.moveTo(e.x1, e.y1); co.lineTo(e.x2, e.y2); }
+    if (A.region !== B.region) { re.moveTo(e.x1, e.y1); re.lineTo(e.x2, e.y2); }
+  }
+  G.bProv = pr; G.bCountry = co; G.bRegion = re;
+  G.asgnDirty = false;
+}
+
+/* ===================================================================== annuler / rétablir */
+class Tx {
+  constructor() { this.before = new Map(); }
+  touch(p) { if (!this.before.has(p.id)) this.before.set(p.id, C.cloneProv(p)); }
+  born(p) { this.before.set(p.id, null); }
+  commit() {
+    const ents = [];
+    for (const [id, b] of this.before) {
+      const cur = S.provs.get(id);
+      ents.push({ id, before: b, after: cur ? C.cloneProv(cur) : null });
+    }
+    if (!ents.length) return false;
+    S.undo.push(ents);
+    if (S.undo.length > 60) S.undo.shift();
+    S.redo.length = 0;
+    markDirty(); syncUI();
+    return true;
+  }
+}
+function applyEnts(ents, useAfter) {
+  for (const e of ents) {
+    const src = useAfter ? e.after : e.before;
+    if (!src) S.provs.delete(e.id); else S.provs.set(e.id, C.cloneProv(src));
+  }
+  G.geomDirty = G.asgnDirty = true;
+  if (!S.provs.has(S.sel)) S.sel = 0;
+  markDirty(); syncUI(); need();
+}
+function undo() { const e = S.undo.pop(); if (e) { S.redo.push(e); applyEnts(e, false); } }
+function redo() { const e = S.redo.pop(); if (e) { S.undo.push(e); applyEnts(e, true); } }
+
+/* ===================================================================== projet */
+function blankState() {
+  S.provs = new Map(); S.countries = new Map(); S.regions = new Map();
+  S.nextProv = S.nextCountry = S.nextRegion = 1;
+  S.sel = S.actC = S.actR = 0; S.undo = []; S.redo = [];
+  S.bg = []; S.bgSel = -1; S.provAlpha = 1;
+  S.cloudName = ''; S.cloudSha = ''; S.cloudConflict = false;
+  G.geomDirty = G.asgnDirty = true;
+}
+const cleanRing = r => {
+  const a = [];
+  for (let i = 0; i < r.length; i += 2) {
+    const x = Math.round(r[i] * 1e5) / 1e5, y = Math.round(r[i + 1] * 1e5) / 1e5, n = a.length;
+    if (n >= 2 && a[n - 2] === x && a[n - 1] === y) continue;
+    a.push(x, y);
+  }
+  const n = a.length;
+  if (n >= 4 && a[0] === a[n - 2] && a[1] === a[n - 1]) a.length = n - 2;
+  return a.length >= 6 ? a : null;
+};
+
+function addCountry(name, tag, color) {
+  const id = S.nextCountry++;
+  S.countries.set(id, { id, name, tag: tag || '', color: color || C.autoColor(id * 3 + 1) });
+  return id;
+}
+function addProvince(name, polys, country) {
+  const id = S.nextProv++;
+  const p = { id, name, color: C.autoColor(id), country: country || 0, region: 0, terrain: NOT_SET, polys };
+  S.provs.set(id, p);
+  return p;
+}
+
+function loadNaturalEarth(data) {
+  blankState();
+  for (const c of data || window.NE_COUNTRIES) {
+    const cid = addCountry(c.n, c.t);
+    addProvince(c.n, c.p.map(poly => poly.map(r => r.slice())), cid);
+  }
+}
+
+function loadGeoJSON(gj) {
+  blankState();
+  for (const f of gj.features || []) {
+    const pr = f.properties || {}, g = f.geometry;
+    if (!g) continue;
+    const name = pr.NAME || pr.name || pr.ADMIN || pr.admin || 'Terre';
+    const tag = pr.ADM0_A3 || pr.ISO_A3 || pr.iso_a3 || '';
+    const polysIn = g.type === 'Polygon' ? [g.coordinates] : g.type === 'MultiPolygon' ? g.coordinates : [];
+    const polys = [];
+    for (const pl of polysIn) {
+      const rings = pl.map(r => cleanRing(r.flat())).filter(Boolean);
+      if (rings.length && cleanRing(pl[0].flat())) polys.push(rings);
+    }
+    if (!polys.length) continue;
+    addProvince(name, polys, addCountry(name, tag));
+  }
+}
+
+function serialize() {
+  return {
+    format: 1, name: S.name, nextProv: S.nextProv, nextCountry: S.nextCountry, nextRegion: S.nextRegion,
+    provAlpha: S.provAlpha, cloudName: S.cloudName, cloudSha: S.cloudSha,
+    bg: S.bg.map(l => ({ name: l.name, src: l.src, x0: l.x0, y0: l.y0, x1: l.x1, y1: l.y1, opacity: l.opacity, visible: l.visible })),
+    countries: [...S.countries.values()], regions: [...S.regions.values()],
+    provinces: [...S.provs.values()].map(p => ({
+      id: p.id, name: p.name, color: p.color, country: p.country, region: p.region, terrain: p.terrain,
+      polys: p.polys.map(pl => pl.map(r => r.map(v => Math.round(v * 1e7) / 1e7))), // 1e-7° ≈ 1 cm : allège le fichier
+    })),
+  };
+}
+function deserialize(d) {
+  blankState();
+  S.name = d.name || 'Projet';
+  for (const c of d.countries || []) S.countries.set(c.id, c);
+  for (const r of d.regions || []) S.regions.set(r.id, r);
+  for (const p of d.provinces || []) S.provs.set(p.id, C.cloneProv(p));
+  S.nextProv = d.nextProv || 1; S.nextCountry = d.nextCountry || 1; S.nextRegion = d.nextRegion || 1;
+  S.provAlpha = d.provAlpha || 1;
+  S.cloudName = d.cloudName || ''; S.cloudSha = d.cloudSha || '';
+  for (const l of d.bg || []) addBgLayer(l);
+}
+
+function addBgLayer(l) {
+  const layer = { name: l.name, src: l.src, x0: l.x0, y0: l.y0, x1: l.x1, y1: l.y1, opacity: l.opacity ?? 0.6, visible: l.visible !== false, img: new Image() };
+  layer.img.onload = () => need();
+  layer.img.src = l.src;
+  S.bg.push(layer);
+  return layer;
+}
+
+/* ---------------------------------------------------------------- stockage IndexedDB */
+const DB = {
+  db: null,
+  open() {
+    return new Promise((res, rej) => {
+      let r;
+      try { r = indexedDB.open('bopvec', 1); } catch (e) { return rej(e); }
+      r.onupgradeneeded = () => { const d = r.result; d.createObjectStore('meta', { keyPath: 'id' }); d.createObjectStore('data', { keyPath: 'id' }); };
+      r.onsuccess = () => { DB.db = r.result; res(); };
+      r.onerror = () => rej(r.error);
+    });
+  },
+  req: r => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }),
+  list: () => DB.db ? DB.req(DB.db.transaction('meta').objectStore('meta').getAll()) : Promise.resolve([]),
+  get: id => DB.req(DB.db.transaction('data').objectStore('data').get(id)),
+  put(meta, data) {
+    return new Promise((res, rej) => {
+      const t = DB.db.transaction(['meta', 'data'], 'readwrite');
+      t.objectStore('meta').put(meta); t.objectStore('data').put({ id: meta.id, data });
+      t.oncomplete = res; t.onerror = () => rej(t.error);
+    });
+  },
+  del(id) {
+    return new Promise((res, rej) => {
+      const t = DB.db.transaction(['meta', 'data'], 'readwrite');
+      t.objectStore('meta').delete(id); t.objectStore('data').delete(id);
+      t.oncomplete = res; t.onerror = () => rej(t.error);
+    });
+  },
+};
+
+let saveTimer = 0;
+function markDirty() {
+  S.dirty = true; setSaved('● modifié');
+  clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 4000);
+}
+function setSaved(t) { const el = $('#saved'); if (el) el.textContent = t; }
+async function saveNow(noCloud) {
+  clearTimeout(saveTimer);
+  if (!S.id || !DB.db) { setSaved(DB.db ? '' : 'stockage indisponible'); if (noCloud !== true) cloudSchedule(); return; }
+  try {
+    await DB.put({ id: S.id, name: S.name, updated: Date.now(), thumb: makeThumb(), nProv: S.provs.size, cloud: S.cloudName }, serialize());
+    S.dirty = false; setSaved('✓ enregistré');
+    if (noCloud !== true) cloudSchedule();
+  } catch (e) { setSaved('⚠ échec sauvegarde'); console.error(e); }
+}
+
+/* ===================================================================== rendu */
+const cv = $('#cv'), ctx = cv.getContext('2d');
+let W = 0, H = 0, dpr = 1, needDraw = false;
+/* need(true) = seule la caméra a bougé : pendant un déplacement/zoom on réutilise l'image
+   de la dernière vue complète (fluide même avec 500 000 sommets), puis on redessine au repos. */
+let sceneDirty = true, wheelUntil = 0, idleT = 0, snap = null, snapCam = null;
+function need(camOnly) {
+  if (!camOnly) sceneDirty = true;
+  if (!needDraw) { needDraw = true; requestAnimationFrame(draw); }
+}
+function blitSnapshot() {
+  const r = S.cam.s / snapCam.s;
+  const nx = (snapCam.x - S.cam.x) * S.cam.s + W / 2, ny = (S.cam.y - snapCam.y) * S.cam.s + H / 2;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#0b1a2b'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.drawImage(snap, (nx - W / 2 * r) * dpr, (ny - H / 2 * r) * dpr, W * r * dpr, H * r * dpr);
+  clearTimeout(idleT);
+  idleT = setTimeout(() => need(), 140);
+}
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  W = cv.clientWidth; H = cv.clientHeight;
+  cv.width = Math.max(1, Math.round(W * dpr)); cv.height = Math.max(1, Math.round(H * dpr));
+  need();
+}
+const s2w = (px, py) => [(px - W / 2) / S.cam.s + S.cam.x, S.cam.y - (py - H / 2) / S.cam.s];
+const w2s = (x, y) => [(x - S.cam.x) * S.cam.s + W / 2, (S.cam.y - y) * S.cam.s + H / 2];
+
+function provFill(p) {
+  switch (S.view) {
+    case 'country': { const c = S.countries.get(p.country); return c ? c.color : NONE_COLOR; }
+    case 'region': { const r = S.regions.get(p.region); return r ? r.color : NONE_COLOR; }
+    case 'terrain': return p.terrain === NOT_SET ? NONE_COLOR : TERRAINS[p.terrain][1];
+    default: return p.color;
+  }
+}
+
+function renderScene(c, w, h, cam, opts) {
+  const s = cam.s;
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.fillStyle = '#0b1a2b'; c.fillRect(0, 0, w * opts.k, h * opts.k);
+  c.setTransform(opts.k * s, 0, 0, -opts.k * s, opts.k * (w / 2 - cam.x * s), opts.k * (h / 2 + cam.y * s));
+  const x0 = cam.x - w / 2 / s, x1 = cam.x + w / 2 / s, y0 = cam.y - h / 2 / s, y1 = cam.y + h / 2 / s;
+  const vp = [x0, y0, x1, y1];
+  const view = opts.view;
+  c.lineJoin = 'round';
+  if (opts.bg) {
+    for (const l of S.bg) {
+      if (!l.visible || !l.img.complete || !l.img.naturalWidth) continue;
+      c.save(); c.globalAlpha = l.opacity;
+      c.translate(l.x0, l.y1); c.scale(1, -1);
+      c.drawImage(l.img, 0, 0, l.x1 - l.x0, l.y1 - l.y0);
+      c.restore();
+    }
+  }
+  const vis = [];
+  for (const p of S.provs.values()) { if (!disjoint(bbOf(p), vp)) vis.push(p); }
+  const fillOf = p => {
+    if (view === 'country' || view === 'bg') { const q = S.countries.get(p.country); return q ? q.color : NONE_COLOR; }
+    if (view === 'region') { const q = S.regions.get(p.region); return q ? q.color : NONE_COLOR; }
+    if (view === 'terrain') return p.terrain === NOT_SET ? NONE_COLOR : TERRAINS[p.terrain][1];
+    return p.color;
+  };
+  c.globalAlpha = opts.alpha === undefined ? 1 : opts.alpha;
+  for (const p of vis) {
+    c.fillStyle = fillOf(p);
+    c.fill(pathOf(p), 'evenodd');
+    if (p.polys.length > 1) { c.strokeStyle = c.fillStyle; c.lineWidth = 0.9 / s; c.stroke(pathOf(p)); }
+  }
+  c.globalAlpha = 1;
+  if (view === 'region' && opts.overlay) {
+    c.globalAlpha = 0.4;
+    for (const p of vis) { const q = S.countries.get(p.country); if (!q) continue; c.fillStyle = q.color; c.fill(pathOf(p), 'evenodd'); }
+    c.globalAlpha = 1;
+  }
+  return { vis, s };
+}
+
+function draw() {
+  needDraw = false;
+  if (!W) return;
+  const moving = (act && act.kind === 'pan') || gesture || performance.now() < wheelUntil;
+  if (moving && !sceneDirty && snap && snap.width === cv.width && snap.height === cv.height) { blitSnapshot(); return; }
+  sceneDirty = false;
+  const dragging = act && act.kind === 'vdrag';
+  if (!dragging) {
+    if (G.geomDirty) rebuildEdges();
+    if (G.asgnDirty) rebuildBorders();
+  }
+  const { vis, s } = renderScene(ctx, W, H, S.cam, { k: dpr, view: S.view, overlay: S.overlayCountry, bg: true, alpha: S.provAlpha });
+  const px = 1 / s;
+  ctx.lineJoin = 'round';
+
+  if (dragging) {
+    ctx.strokeStyle = 'rgba(0,0,0,.55)'; ctx.lineWidth = 0.8 * px;
+    if (G.dragB) ctx.stroke(G.dragB);
+    for (const id of act.provIds) { const p = S.provs.get(id); if (p) ctx.stroke(pathOf(p)); }
+  } else if (G.bProv) {
+    ctx.strokeStyle = S.view === 'prov' ? 'rgba(0,0,0,.6)' : 'rgba(0,0,0,.28)';
+    ctx.lineWidth = (S.view === 'prov' ? 0.9 : 0.6) * px;
+    ctx.stroke(G.bProv);
+    if (S.view === 'region') { ctx.strokeStyle = 'rgba(0,0,0,.8)'; ctx.lineWidth = 1.3 * px; ctx.stroke(G.bRegion); }
+    if (S.view === 'country' || S.view === 'region') {
+      ctx.strokeStyle = S.view === 'region' ? 'rgba(255,255,255,.9)' : 'rgba(0,0,0,.9)';
+      ctx.lineWidth = (S.view === 'region' ? 2 : 1.6) * px; ctx.stroke(G.bCountry);
+    }
+  }
+
+  // sélection / actif
+  const sp = S.provs.get(S.sel);
+  if (sp && S.view === 'prov') {
+    ctx.strokeStyle = '#ffe14d'; ctx.lineWidth = 2.4 * px; ctx.stroke(pathOf(sp));
+  }
+
+  // prévisualisation de découpe
+  if (cut.pts.length || cut.free) {
+    const pts = cut.pts.slice();
+    if (cut.free) for (let i = 0; i < cut.free.length; i++) pts.push(cut.free[i]);
+    else if (cut.hover) pts.push(cut.hover[0], cut.hover[1]);
+    ctx.strokeStyle = '#ff4d6d'; ctx.lineWidth = 2.2 * px; ctx.setLineDash([6 * px, 4 * px]);
+    ctx.beginPath(); ctx.moveTo(pts[0], pts[1]);
+    for (let i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i], pts[i + 1]);
+    ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  // prévisualisation du polygone libre
+  if (pdraw.pts.length) {
+    const pts = pdraw.pts.slice();
+    if (pdraw.hover) pts.push(pdraw.hover[0], pdraw.hover[1]);
+    ctx.strokeStyle = '#4dd2ff'; ctx.lineWidth = 2.2 * px; ctx.fillStyle = 'rgba(77,210,255,.18)';
+    ctx.beginPath(); ctx.moveTo(pts[0], pts[1]);
+    for (let i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i], pts[i + 1]);
+    ctx.fill(); ctx.stroke();
+  }
+
+  // couche écran : noms, sommets
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  if (pdraw.pts.length) {
+    ctx.fillStyle = '#4dd2ff';
+    for (let i = 0; i < pdraw.pts.length; i += 2) { const [sx, sy] = w2s(pdraw.pts[i], pdraw.pts[i + 1]); ctx.beginPath(); ctx.arc(sx, sy, i === 0 ? 6 : 3.5, 0, 7); ctx.fill(); }
+  }
+  if (S.view === 'bg') {
+    const l = S.bg[S.bgSel];
+    if (l) {
+      const [ax, ay] = w2s(l.x0, l.y1), [bx, by] = w2s(l.x1, l.y0);
+      ctx.strokeStyle = '#4da3ff'; ctx.lineWidth = 1.5; ctx.strokeRect(ax, ay, bx - ax, by - ay);
+      ctx.fillStyle = '#4da3ff';
+      for (const [hx, hy] of [[ax, ay], [bx, ay], [ax, by], [bx, by]]) ctx.fillRect(hx - 6, hy - 6, 12, 12);
+    }
+  }
+  if (S.labels) {
+    ctx.font = '12px system-ui,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,.65)'; ctx.fillStyle = '#fff';
+    for (const p of vis) {
+      const bb = bbOf(p), wpx = (bb[2] - bb[0]) * s;
+      if (wpx < 55) continue;
+      const [cx, cy] = w2s((bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2);
+      ctx.strokeText(p.name, cx, cy); ctx.fillText(p.name, cx, cy);
+    }
+  }
+  if (S.view === 'prov' && S.tool === 'vertex' && sp) {
+    ctx.fillStyle = '#fff'; ctx.strokeStyle = '#000'; ctx.lineWidth = 1;
+    let n = 0;
+    for (const poly of sp.polys) for (const r of poly) for (let i = 0; i < r.length && n < 6000; i += 2) {
+      const [sx, sy] = w2s(r[i], r[i + 1]);
+      if (sx < -5 || sy < -5 || sx > W + 5 || sy > H + 5) continue;
+      ctx.fillRect(sx - 3, sy - 3, 6, 6); ctx.strokeRect(sx - 3, sy - 3, 6, 6); n++;
+    }
+  }
+
+  // instantané de la vue complète (réutilisé pendant les déplacements/zooms)
+  if (!snap) snap = document.createElement('canvas');
+  if (snap.width !== cv.width || snap.height !== cv.height) { snap.width = cv.width; snap.height = cv.height; }
+  snap.getContext('2d').drawImage(cv, 0, 0);
+  snapCam = { x: S.cam.x, y: S.cam.y, s: S.cam.s };
+}
+
+function makeThumb() {
+  const w = 300, h = 150, c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const bb = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const p of S.provs.values()) { const b = bbOf(p); bb[0] = Math.min(bb[0], b[0]); bb[1] = Math.min(bb[1], b[1]); bb[2] = Math.max(bb[2], b[2]); bb[3] = Math.max(bb[3], b[3]); }
+  if (!isFinite(bb[0])) return '';
+  const s = Math.min(w / (bb[2] - bb[0] + 1e-6), h / (bb[3] - bb[1] + 1e-6)) * 0.96;
+  renderScene(c.getContext('2d'), w, h, { x: (bb[0] + bb[2]) / 2, y: (bb[1] + bb[3]) / 2, s }, { k: 1, view: 'country', overlay: false });
+  return c.toDataURL('image/jpeg', 0.6);
+}
+
+function fitView() {
+  const bb = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const p of S.provs.values()) { const b = bbOf(p); bb[0] = Math.min(bb[0], b[0]); bb[1] = Math.min(bb[1], b[1]); bb[2] = Math.max(bb[2], b[2]); bb[3] = Math.max(bb[3], b[3]); }
+  if (!isFinite(bb[0])) { bb[0] = -180; bb[1] = -90; bb[2] = 180; bb[3] = 90; }
+  S.cam.x = (bb[0] + bb[2]) / 2; S.cam.y = (bb[1] + bb[3]) / 2;
+  S.cam.s = Math.min(W / ((bb[2] - bb[0]) * 1.04 + 1e-6), H / ((bb[3] - bb[1]) * 1.12 + 1e-6));
+  need();
+}
+
+/* ===================================================================== recherche / hit-test */
+function hitProv(wx, wy) {
+  for (const p of S.provs.values()) {
+    const bb = bbOf(p);
+    if (wx < bb[0] || wx > bb[2] || wy < bb[1] || wy > bb[3]) continue;
+    for (const poly of p.polys) {
+      const pb = C.polyBBox(poly);
+      if (wx < pb[0] || wx > pb[2] || wy < pb[1] || wy > pb[3]) continue;
+      if (C.pointInPoly(wx, wy, poly)) return p;
+    }
+  }
+  return null;
+}
+
+function nextName(name) {
+  const base = name.replace(/\s+\d+$/, '');
+  const re = new RegExp('^' + base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?:\\s+(\\d+))?$');
+  let max = 1;
+  for (const p of S.provs.values()) { const m = re.exec(p.name); if (m) max = Math.max(max, m[1] ? +m[1] : 1); }
+  return base + ' ' + (max + 1);
+}
+
+/* ===================================================================== outils : découpe */
+const cut = { pts: [], free: null, hover: null, down: null };
+function cutReset() { cut.pts = []; cut.free = null; cut.hover = null; cut.down = null; polyReset(); need(); }
+const pdraw = { pts: [], hover: null };
+function polyReset() { pdraw.pts = []; pdraw.hover = null; }
+
+function applyCut(line) {
+  if (line.length < 4) { toast('Il faut au moins 2 points'); return; }
+  const lb = [Infinity, Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < line.length; i += 2) {
+    lb[0] = Math.min(lb[0], line[i]); lb[2] = Math.max(lb[2], line[i]);
+    lb[1] = Math.min(lb[1], line[i + 1]); lb[3] = Math.max(lb[3], line[i + 1]);
+  }
+  const tx = new Tx(), newPts = [];
+  let created = 0, did = false;
+  for (const p of [...S.provs.values()]) {
+    if (disjoint(bbOf(p), lb)) continue;
+    const keep = [], extra = [];
+    let changed = false;
+    for (const poly of p.polys) {
+      const res = disjoint(C.polyBBox(poly), lb) ? null : C.splitPoly(poly, line);
+      if (!res) { keep.push(poly); continue; }
+      changed = true;
+      keep.push(res.polys[0]);
+      for (let k = 1; k < res.polys.length; k++) extra.push(res.polys[k]);
+      for (const pt of res.newPoints) newPts.push(pt);
+    }
+    if (!changed) continue;
+    tx.touch(p);
+    p.polys = keep; inval(p);
+    for (const ep of extra) {
+      const np = addProvince(nextName(p.name), [ep], p.country);
+      np.region = p.region; np.terrain = p.terrain;
+      tx.born(np); created++;
+    }
+    did = true;
+  }
+  if (!did) { toast('La ligne ne coupe aucune province (dépasse bien des deux côtés)'); return; }
+  // T-jonctions : répercute les nouveaux sommets sur les voisines
+  for (const pt of newPts) {
+    for (const q of S.provs.values()) {
+      const bb = bbOf(q);
+      if (pt.x < bb[0] - 1e-7 || pt.x > bb[2] + 1e-7 || pt.y < bb[1] - 1e-7 || pt.y > bb[3] + 1e-7) continue;
+      for (const poly of q.polys) for (const r of poly) {
+        const k = C.edgeIndexOn(r, pt.x, pt.y);
+        if (k < 0) continue;
+        tx.touch(q); r.splice(2 * (k + 1), 0, pt.x, pt.y); inval(q);
+      }
+    }
+  }
+  tx.commit();
+  toast(created + ' province' + (created > 1 ? 's' : '') + ' créée' + (created > 1 ? 's' : ''));
+}
+
+function cutDown(e, px, py, wx, wy, right) {
+  if (right) { cut.pts.splice(-2, 2); cut.free = null; need(); return; }
+  cut.down = { px, py };
+  act = { kind: 'cut' };
+}
+function cutMove(px, py, wx, wy) {
+  const d = cut.down;
+  if (d && !cut.free && Math.hypot(px - d.px, py - d.py) > 7) {
+    const [sx, sy] = s2w(d.px, d.py);
+    cut.free = [sx, sy];
+  }
+  if (cut.free) {
+    const n = cut.free.length;
+    const [lx, ly] = w2s(cut.free[n - 2], cut.free[n - 1]);
+    if (Math.hypot(px - lx, py - ly) > 2.5) cut.free.push(wx, wy);
+  }
+  cut.hover = [wx, wy];
+  need();
+}
+function cutUp(px, py, wx, wy) {
+  if (cut.free) {
+    cut.free.push(wx, wy);
+    const line = cut.pts.concat(cut.free);
+    cutReset(); applyCut(line);
+  } else if (cut.down) {
+    // clic simple : ajoute un sommet ; double-clic (proche du précédent) termine
+    const n = cut.pts.length;
+    if (n >= 2) {
+      const [lx, ly] = w2s(cut.pts[n - 2], cut.pts[n - 1]);
+      if (Math.hypot(px - lx, py - ly) < 10) { const line = cut.pts.slice(); cutReset(); applyCut(line); return; }
+    }
+    cut.pts.push(wx, wy);
+  }
+  cut.down = null; need();
+}
+function cutFinish() { if (cut.pts.length >= 4) { const line = cut.pts.slice(); cutReset(); applyCut(line); } }
+
+/* ===================================================================== outils : fusion / éclater / supprimer */
+function mergeClick(wx, wy) {
+  const p = hitProv(wx, wy);
+  if (!p) return;
+  const A = S.provs.get(S.sel);
+  if (!A) { S.sel = p.id; syncUI(); need(); return; }
+  if (A.id === p.id) return;
+  const tx = new Tx(); tx.touch(A); tx.touch(p);
+  const u = C.unionPolys(A.polys, p.polys);
+  A.polys = u || A.polys.concat(p.polys);
+  S.provs.delete(p.id); inval(A);
+  tx.commit();
+  toast(u ? 'Fusionné dans « ' + A.name + ' » (frontière commune supprimée)' : 'Fusionné dans « ' + A.name + ' » (parties conservées : contours non concordants)');
+}
+function explodeSel() {
+  const p = S.provs.get(S.sel);
+  if (!p || p.polys.length < 2) { toast('Cette province n’a qu’une seule partie'); return; }
+  const tx = new Tx(); tx.touch(p);
+  const extra = p.polys.slice(1);
+  p.polys = [p.polys[0]]; inval(p);
+  for (const poly of extra) {
+    const np = addProvince(nextName(p.name), [poly], p.country);
+    np.region = p.region; np.terrain = p.terrain; tx.born(np);
+  }
+  tx.commit(); toast(extra.length + ' provinces créées');
+}
+function deleteSel() {
+  const p = S.provs.get(S.sel);
+  if (!p) return;
+  const tx = new Tx(); tx.touch(p);
+  S.provs.delete(p.id); S.sel = 0; G.geomDirty = G.asgnDirty = true;
+  tx.commit(); need();
+}
+
+/* ===================================================================== polygone libre / océans */
+const KIND_TERRAIN = { land: NOT_SET, sea: 10, lake: 12 };
+const KIND_NAME = { land: 'Terre', sea: 'Mer', lake: 'Lac' };
+
+const seaColor = id => C.hsl(205 + (id * 13) % 28, 50, 24 + (id * 7) % 12);
+
+function freshName(base) {
+  const re = new RegExp('^' + base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?:\\s+(\\d+))?$');
+  let max = 0;
+  for (const p of S.provs.values()) { const m = re.exec(p.name); if (m) max = Math.max(max, m[1] ? +m[1] : 1); }
+  return base + ' ' + (max + 1);
+}
+
+function snapVertex(wx, wy) {
+  const r = 10 / S.cam.s;
+  let best = null, bd = r * r;
+  for (const p of S.provs.values()) {
+    const bb = bbOf(p);
+    if (wx < bb[0] - r || wx > bb[2] + r || wy < bb[1] - r || wy > bb[3] + r) continue;
+    for (const pl of p.polys) for (const ring of pl) for (let i = 0; i < ring.length; i += 2) {
+      const dx = ring[i] - wx, dy = ring[i + 1] - wy, d = dx * dx + dy * dy;
+      if (d < bd) { bd = d; best = [ring[i], ring[i + 1]]; }
+    }
+  }
+  return best;
+}
+
+function polyDown(px, py, wx, wy, right) {
+  if (right) { pdraw.pts.splice(-2, 2); need(); return; }
+  const sn = snapVertex(wx, wy);
+  if (sn) { wx = sn[0]; wy = sn[1]; }
+  const n = pdraw.pts.length;
+  if (n >= 6) {
+    const [fx, fy] = w2s(pdraw.pts[0], pdraw.pts[1]);
+    if (Math.hypot(px - fx, py - fy) < 12) { polyFinish(); return; }
+  }
+  if (n >= 2) {
+    const [lx, ly] = w2s(pdraw.pts[n - 2], pdraw.pts[n - 1]);
+    if (Math.hypot(px - lx, py - ly) < 6) { if (n >= 6) polyFinish(); return; } // double-clic
+  }
+  pdraw.pts.push(wx, wy); need();
+}
+
+function polyFinish() {
+  const raw = pdraw.pts.slice();
+  polyReset(); need();
+  const ring = [];
+  for (let i = 0; i < raw.length; i += 2) {
+    const n = ring.length;
+    if (n >= 2 && ring[n - 2] === raw[i] && ring[n - 1] === raw[i + 1]) continue;
+    ring.push(raw[i], raw[i + 1]);
+  }
+  if (ring.length >= 4 && ring[0] === ring[ring.length - 2] && ring[1] === ring[ring.length - 1]) ring.length -= 2;
+  if (ring.length < 6) { toast('Il faut au moins 3 points'); return; }
+  const n = ring.length / 2;
+  for (let i = 0; i < n; i++) for (let j = i + 2; j < n; j++) {
+    if (i === 0 && j === n - 1) continue;
+    const i2 = (i + 1) % n, j2 = (j + 1) % n;
+    if (C.segCross(ring[2 * i], ring[2 * i + 1], ring[2 * i2], ring[2 * i2 + 1], ring[2 * j], ring[2 * j + 1], ring[2 * j2], ring[2 * j2 + 1])) {
+      toast('Le polygone se recoupe lui-même'); return;
+    }
+  }
+  const bb = C.ringBBox(ring);
+  for (const p of S.provs.values()) {
+    if (disjoint(bbOf(p), bb)) continue;
+    for (const pl of p.polys) for (const r of pl) {
+      const m = r.length / 2;
+      for (let k = 0; k < m; k++) {
+        const k2 = (k + 1) % m;
+        for (let i = 0; i < n; i++) {
+          const i2 = (i + 1) % n;
+          if (C.segCross(ring[2 * i], ring[2 * i + 1], ring[2 * i2], ring[2 * i2 + 1], r[2 * k], r[2 * k + 1], r[2 * k2], r[2 * k2 + 1])) {
+            toast('Le polygone traverse « ' + p.name + ' » : colle-le à ses sommets ou reste dans le vide'); return;
+          }
+        }
+      }
+    }
+  }
+  // point intérieur (centroïde de surface, sinon barycentre des 3 premiers sommets)
+  let cx = 0, cy = 0;
+  for (let i = 0; i < n; i++) { cx += ring[2 * i]; cy += ring[2 * i + 1]; }
+  cx /= n; cy /= n;
+  if (!C.pointInRing(cx, cy, ring)) { cx = (ring[0] + ring[2] + ring[4]) / 3; cy = (ring[1] + ring[3] + ring[5]) / 3; }
+  let host = null;
+  for (const p of S.provs.values()) {
+    const b = bbOf(p);
+    if (cx < b[0] || cx > b[2] || cy < b[1] || cy > b[3]) continue;
+    for (const pl of p.polys) if (C.pointInPoly(cx, cy, pl)) { host = { p, pl }; break; }
+    if (host) break;
+  }
+  const kind = S.newKind, tx = new Tx();
+  if (host) { tx.touch(host.p); host.pl.push(C.orientRing(ring, false)); inval(host.p); }
+  const np = addProvince(freshName(KIND_NAME[kind]), [[C.orientRing(ring, true)]], 0);
+  np.terrain = KIND_TERRAIN[kind]; tx.born(np);
+  if (kind === 'sea') np.color = seaColor(np.id); else if (kind === 'lake') np.color = '#cfe3f2';
+  // sommets posés sur l'arête d'une voisine : on les y insère (pas de T-jonction)
+  for (let i = 0; i < n; i++) {
+    for (const q of S.provs.values()) {
+      if (q === np) continue;
+      const b = bbOf(q), x = ring[2 * i], y = ring[2 * i + 1];
+      if (x < b[0] - 1e-7 || x > b[2] + 1e-7 || y < b[1] - 1e-7 || y > b[3] + 1e-7) continue;
+      for (const pl of q.polys) for (const r of pl) {
+        const k = C.edgeIndexOn(r, x, y);
+        if (k < 0) continue;
+        tx.touch(q); r.splice(2 * (k + 1), 0, x, y); inval(q);
+      }
+    }
+  }
+  S.sel = np.id; inval(np);
+  tx.commit();
+  toast(host ? KIND_NAME[kind] + ' créé (trou découpé dans « ' + host.p.name + ' »)' : KIND_NAME[kind] + ' créé');
+}
+
+function generateOcean() {
+  const all = [];
+  for (const p of S.provs.values()) for (const pl of p.polys) all.push(pl);
+  if (!all.length) return;
+  const comp = C.complementPolys([-180, -90, 180, 90], all);
+  if (!comp) { toast('Génération impossible : des contours ne se referment pas (frontières non concordantes)'); return; }
+  const pieces = comp.filter(pl => C.polysArea([pl]) > 1e-6).sort((a, b) => C.polysArea([b]) - C.polysArea([a]));
+  if (!pieces.length) { toast('Rien à générer : la carte est déjà entièrement couverte'); return; }
+  const tx = new Tx();
+  pieces.forEach((pl, i) => {
+    const np = addProvince(i === 0 ? freshName('Océan') : freshName('Mer'), [pl], 0);
+    np.terrain = 10; np.color = seaColor(np.id); tx.born(np);
+  });
+  tx.commit(); G.geomDirty = G.asgnDirty = true; need();
+  toast(pieces.length + ' zone' + (pieces.length > 1 ? 's' : '') + ' maritime' + (pieces.length > 1 ? 's' : '') + ' générée' + (pieces.length > 1 ? 's' : '') + ' — découpe-les ensuite avec l’outil Découpe');
+}
+
+/* ===================================================================== fonds de référence */
+function bgHit(px, py, wx, wy) {
+  const l = S.bg[S.bgSel];
+  if (!l) return;
+  const [ax, ay] = w2s(l.x0, l.y1), [bx, by] = w2s(l.x1, l.y0);
+  const corners = [[ax, ay, 'l', 't'], [bx, ay, 'r', 't'], [ax, by, 'l', 'b'], [bx, by, 'r', 'b']];
+  for (const [cx, cy, hx, vy] of corners) {
+    if (Math.hypot(px - cx, py - cy) < 14) { act = { kind: 'bgresize', l, hx, vy, ratio: (l.y1 - l.y0) / (l.x1 - l.x0) }; return; }
+  }
+  if (wx >= l.x0 && wx <= l.x1 && wy >= l.y0 && wy <= l.y1) act = { kind: 'bgmove', l, lx: wx, ly: wy };
+}
+function bgMove(wx, wy) {
+  const a = act, l = a.l;
+  if (a.kind === 'bgmove') {
+    const dx = wx - a.lx, dy = wy - a.ly;
+    l.x0 += dx; l.x1 += dx; l.y0 += dy; l.y1 += dy; a.lx = wx; a.ly = wy;
+  } else {
+    const ax = a.hx === 'l' ? l.x1 : l.x0, ay = a.vy === 't' ? l.y0 : l.y1;
+    const w = Math.max(Math.abs(wx - ax), 0.01), h = w * a.ratio;
+    if (a.hx === 'l') { l.x0 = ax - w; l.x1 = ax; } else { l.x0 = ax; l.x1 = ax + w; }
+    if (a.vy === 't') { l.y0 = ay; l.y1 = ay + h; } else { l.y0 = ay - h; l.y1 = ay; }
+  }
+  need();
+}
+function addBgFromFile(file) {
+  if (S.bg.length >= 3) { toast('3 fonds maximum'); return; }
+  const rd = new FileReader();
+  rd.onload = () => {
+    const src = rd.result, img = new Image();
+    img.onload = () => {
+      const w = 360, h = w * img.naturalHeight / img.naturalWidth;
+      const l = addBgLayer({ name: file.name.replace(/\.\w+$/, ''), src, x0: -180, x1: 180, y0: -h / 2, y1: h / 2, opacity: 0.6, visible: true });
+      S.bgSel = S.bg.indexOf(l);
+      markDirty(); syncUI(); need();
+    };
+    img.onerror = () => toast('Image illisible');
+    img.src = src;
+  };
+  rd.readAsDataURL(file);
+}
+
+/* ===================================================================== recherche / bilan / renommage */
+function zoomTo(bb) {
+  const w = Math.max(bb[2] - bb[0], 0.02), h = Math.max(bb[3] - bb[1], 0.02);
+  S.cam.x = (bb[0] + bb[2]) / 2; S.cam.y = (bb[1] + bb[3]) / 2;
+  S.cam.s = clampS(Math.min(4000, W * 0.6 / w, H * 0.6 / h));
+  need();
+}
+function gotoProv(id) {
+  const p = S.provs.get(id);
+  if (!p) return;
+  if (S.view !== 'prov') setView('prov');
+  S.sel = id; zoomTo(bbOf(p)); syncUI();
+}
+function gotoCountry(id) {
+  const bb = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const p of S.provs.values()) if (p.country === id) { const b = bbOf(p); bb[0] = Math.min(bb[0], b[0]); bb[1] = Math.min(bb[1], b[1]); bb[2] = Math.max(bb[2], b[2]); bb[3] = Math.max(bb[3], b[3]); }
+  setView('country'); S.actC = id;
+  if (isFinite(bb[0])) zoomTo(bb);
+  syncUI();
+}
+
+function searchResults(q) {
+  q = q.trim().toLowerCase();
+  if (!q) return [];
+  const out = [];
+  for (const c of S.countries.values()) if (c.name.toLowerCase().includes(q) || (c.tag || '').toLowerCase() === q) out.push({ k: 'c', id: c.id, t: c.name, s: 'pays' });
+  for (const p of S.provs.values()) if (p.name.toLowerCase().includes(q)) out.push({ k: 'p', id: p.id, t: p.name, s: 'province #' + p.id });
+  return out.slice(0, 12);
+}
+function pickResult(r) {
+  $('#sres').hidden = true; $('#search').value = ''; $('#search').blur();
+  if (r.k === 'p') gotoProv(r.id); else gotoCountry(r.id);
+}
+
+function terrType(p) { return p.terrain === NOT_SET ? 'land' : TERRAINS[p.terrain][2]; }
+
+function bilan() {
+  const lands = [...S.provs.values()].filter(p => terrType(p) === 'land');
+  const all = [...S.provs.values()];
+  const names = new Map();
+  for (const p of all) names.set(p.name, (names.get(p.name) || 0) + 1);
+  const usedC = new Set(all.map(p => p.country)), usedR = new Set(all.map(p => p.region));
+  const hasRegions = S.regions.size > 0;
+  const item = p => ({ k: 'p', id: p.id, t: p.name });
+  return [
+    { t: 'Terres sans pays', warn: true, items: lands.filter(p => !p.country).map(item) },
+    { t: 'Terres sans région', warn: hasRegions, items: hasRegions ? lands.filter(p => !p.region).map(item) : [] },
+    { t: 'Provinces sans terrain défini', warn: true, items: all.filter(p => p.terrain === NOT_SET).map(item) },
+    { t: 'Mers/infranchissables rattachées à un pays', warn: true, items: all.filter(p => terrType(p) !== 'land' && p.country).map(item) },
+    { t: 'Noms en double', warn: true, items: all.filter(p => names.get(p.name) > 1).map(item) },
+    { t: 'Très petites provinces (< 0,002 °²)', warn: false, items: all.filter(p => C.polysArea(p.polys) < 0.002).map(item) },
+    { t: 'Provinces en plusieurs parties', warn: false, items: all.filter(p => p.polys.length > 1).map(item) },
+    { t: 'Pays vides', warn: false, items: [...S.countries.values()].filter(c => !usedC.has(c.id)).map(c => ({ k: 'cn', id: c.id, t: c.name })) },
+    { t: 'Régions vides', warn: false, items: [...S.regions.values()].filter(r => !usedR.has(r.id)).map(r => ({ k: 'rg', id: r.id, t: r.name })) },
+  ];
+}
+
+function showBilan() {
+  $('#dlgTitle').textContent = 'Bilan et vérifications';
+  const cats = bilan(), body = $('#dlgBody');
+  const total = S.provs.size;
+  body.innerHTML = `<div class="kv">${total} provinces · ${S.countries.size} pays · ${S.regions.size} régions</div>`
+    + cats.map((c, i) => `<details ${c.items.length && c.warn ? 'open' : ''}><summary><span class="${c.items.length ? (c.warn ? 'bad' : 'mid') : 'good'}">${c.items.length ? c.items.length : '✓'}</span> ${esc(c.t)}</summary>
+      <div class="chips">${c.items.slice(0, 80).map((it, j) => `<button data-c="${i}" data-j="${j}">${esc(it.t)}</button>`).join('')}${c.items.length > 80 ? `<span class="kv">… +${c.items.length - 80}</span>` : ''}</div></details>`).join('');
+  for (const b of body.querySelectorAll('button[data-c]')) {
+    b.onclick = () => {
+      const it = cats[+b.dataset.c].items[+b.dataset.j];
+      $('#dlg').hidden = true;
+      if (it.k === 'p') gotoProv(it.id);
+      else if (it.k === 'cn') { setView('country'); S.actC = it.id; syncUI(); }
+      else { setView('region'); S.actR = it.id; syncUI(); }
+    };
+  }
+  $('#dlg').hidden = false;
+}
+
+function renameBatch(kind, id) {
+  const holder = kind === 'country' ? S.countries.get(id) : S.regions.get(id);
+  if (!holder) return;
+  const ps = [...S.provs.values()].filter(p => (kind === 'country' ? p.country : p.region) === id)
+    .sort((a, b) => { const A = bbOf(a), B = bbOf(b); return (B[3] + B[1]) - (A[3] + A[1]) || (A[0] + A[2]) - (B[0] + B[2]); });
+  if (!ps.length) { toast('Aucune province'); return; }
+  const tx = new Tx();
+  ps.forEach((p, i) => { tx.touch(p); p.name = ps.length === 1 ? holder.name : holder.name + ' ' + (i + 1); });
+  tx.commit(); G.asgnDirty = true; need();
+  toast(ps.length + (ps.length > 1 ? ' provinces renommées (du nord au sud)' : ' province renommée'));
+}
+
+/* ===================================================================== outils : sommets */
+function forEachRing(cb) { for (const p of S.provs.values()) for (const poly of p.polys) for (const r of poly) cb(p, r); }
+
+function collectRefs(x, y) {
+  const refs = [], eps = 1e-9;
+  for (const p of S.provs.values()) {
+    const bb = bbOf(p);
+    if (x < bb[0] - eps || x > bb[2] + eps || y < bb[1] - eps || y > bb[3] + eps) continue;
+    for (const poly of p.polys) for (const r of poly) {
+      for (let i = 0; i < r.length; i += 2) if (Math.abs(r[i] - x) < eps && Math.abs(r[i + 1] - y) < eps) refs.push({ p, r, i });
+    }
+  }
+  return refs;
+}
+
+function startVertexDrag(refs) {
+  const tx = new Tx(), ids = new Set();
+  for (const f of refs) { tx.touch(f.p); ids.add(f.p.id); }
+  const b = new Path2D();
+  for (const e of G.edges) { if (ids.has(e.a) || ids.has(e.b)) continue; b.moveTo(e.x1, e.y1); b.lineTo(e.x2, e.y2); }
+  G.dragB = b;
+  act = { kind: 'vdrag', refs, tx, provIds: ids, moved: false };
+  need();
+}
+
+function vertexDown(e, px, py, wx, wy, right) {
+  const r = 10 / S.cam.s;
+  let best = null, bd = r * r;
+  for (const p of S.provs.values()) {
+    const bb = bbOf(p);
+    if (wx < bb[0] - r || wx > bb[2] + r || wy < bb[1] - r || wy > bb[3] + r) continue;
+    for (const poly of p.polys) for (const ring of poly) for (let i = 0; i < ring.length; i += 2) {
+      const dx = ring[i] - wx, dy = ring[i + 1] - wy, d = dx * dx + dy * dy;
+      if (d < bd) { bd = d; best = [ring[i], ring[i + 1]]; }
+    }
+  }
+  if (best) {
+    const refs = collectRefs(best[0], best[1]);
+    if (right) deleteVertices(refs); else startVertexDrag(refs);
+    return;
+  }
+  if (right) return;
+  // arête de la province sélectionnée -> nouveau sommet
+  const sp = S.provs.get(S.sel);
+  if (sp) {
+    let eb = null, ed = r;
+    for (const poly of sp.polys) for (const ring of poly) {
+      const n = ring.length / 2;
+      for (let k = 0; k < n; k++) {
+        const ax = ring[2 * k], ay = ring[2 * k + 1], j = (k + 1) % n, bx = ring[2 * j], by = ring[2 * j + 1];
+        const ex = bx - ax, ey = by - ay, l2 = ex * ex + ey * ey;
+        if (!l2) continue;
+        const t = Math.max(0, Math.min(1, ((wx - ax) * ex + (wy - ay) * ey) / l2));
+        const qx = ax + t * ex, qy = ay + t * ey, d = Math.hypot(wx - qx, wy - qy);
+        if (d < ed && t > 0 && t < 1) { ed = d; eb = { ax, ay, bx, by, qx, qy }; }
+      }
+    }
+    if (eb) { insertVertexShared(eb); return; }
+  }
+  const p = hitProv(wx, wy);
+  S.sel = p ? p.id : 0; syncUI(); need();
+}
+
+function insertVertexShared(eb) {
+  const tx = new Tx(), refs = [];
+  const same = (x, y, u, v) => Math.abs(x - u) < 1e-9 && Math.abs(y - v) < 1e-9;
+  for (const p of S.provs.values()) {
+    const bb = bbOf(p);
+    if (disjoint(bb, [Math.min(eb.ax, eb.bx) - 1e-9, Math.min(eb.ay, eb.by) - 1e-9, Math.max(eb.ax, eb.bx) + 1e-9, Math.max(eb.ay, eb.by) + 1e-9])) continue;
+    for (const poly of p.polys) for (const r of poly) {
+      const n = r.length / 2;
+      for (let k = 0; k < n; k++) {
+        const j = (k + 1) % n;
+        const fw = same(r[2 * k], r[2 * k + 1], eb.ax, eb.ay) && same(r[2 * j], r[2 * j + 1], eb.bx, eb.by);
+        const bw = same(r[2 * k], r[2 * k + 1], eb.bx, eb.by) && same(r[2 * j], r[2 * j + 1], eb.ax, eb.ay);
+        if (!fw && !bw) continue;
+        tx.touch(p); r.splice(2 * (k + 1), 0, eb.qx, eb.qy); inval(p);
+        refs.push({ p, r, i: 2 * (k + 1) });
+        break;
+      }
+    }
+  }
+  if (!refs.length) return;
+  const ids = new Set(refs.map(f => f.p.id));
+  const b = new Path2D();
+  for (const e of G.edges) { if (ids.has(e.a) || ids.has(e.b)) continue; b.moveTo(e.x1, e.y1); b.lineTo(e.x2, e.y2); }
+  G.dragB = b;
+  act = { kind: 'vdrag', refs, tx, provIds: ids, moved: true };
+  need();
+}
+
+function deleteVertices(refs) {
+  const tx = new Tx();
+  const byRing = new Map();
+  for (const f of refs) { if (!byRing.has(f.r)) byRing.set(f.r, { p: f.p, idx: [] }); byRing.get(f.r).idx.push(f.i); }
+  let n = 0;
+  for (const [r, o] of byRing) {
+    if (r.length / 2 <= 3) continue;
+    tx.touch(o.p);
+    for (const i of o.idx.sort((a, b) => b - a)) r.splice(i, 2);
+    inval(o.p); n++;
+  }
+  if (n) tx.commit(); else toast('Sommet nécessaire (3 minimum)');
+}
+
+/* ===================================================================== outils : assignation / pipette / terrain */
+function paintApply(p, right) {
+  const t = act.tx;
+  let changed = false;
+  if (S.view === 'country') {
+    const v = right ? 0 : S.actC;
+    if (!right && !S.actC) { toast('Choisis d’abord un pays'); return; }
+    if (p.country !== v) { t.touch(p); p.country = v; changed = true; }
+  } else if (S.view === 'region') {
+    const v = right ? 0 : S.actR;
+    if (!right && !S.actR) { toast('Crée ou choisis d’abord une région'); return; }
+    if (p.region !== v) { t.touch(p); p.region = v; changed = true; }
+  } else if (S.view === 'terrain') {
+    const v = right ? NOT_SET : S.pen;
+    if (p.terrain !== v) { t.touch(p); p.terrain = v; changed = true; }
+  }
+  if (changed) { G.asgnDirty = true; act.changed = true; need(); }
+}
+function paintDown(e, px, py, wx, wy, right) {
+  act = { kind: 'paint', tx: new Tx(), right, changed: false };
+  const p = hitProv(wx, wy);
+  if (p) paintApply(p, right);
+}
+function paintMove(wx, wy) {
+  const p = hitProv(wx, wy);
+  if (p) paintApply(p, act.right);
+}
+function pipetteAt(wx, wy) {
+  const p = hitProv(wx, wy);
+  if (!p) return;
+  if (S.view === 'country' && p.country) S.actC = p.country;
+  else if (S.view === 'region' && p.region) S.actR = p.region;
+  else if (S.view === 'terrain' && p.terrain !== NOT_SET) S.pen = p.terrain;
+  syncUI();
+}
+
+/* ===================================================================== entrées pointeur */
+let act = null, spaceDown = false, lastPen = 0, gesture = null;
+const ptrs = new Map();
+
+function toolDown(e, px, py) {
+  const [wx, wy] = s2w(px, py), right = e.button === 2;
+  if (S.view === 'bg') { if (S.tool === 'bgmove') bgHit(px, py, wx, wy); return; }
+  if (S.view === 'prov') {
+    if (S.tool === 'select') { const p = hitProv(wx, wy); S.sel = p ? p.id : 0; syncUI(); need(); }
+    else if (S.tool === 'poly') polyDown(px, py, wx, wy, right);
+    else if (S.tool === 'cut') cutDown(e, px, py, wx, wy, right);
+    else if (S.tool === 'merge') mergeClick(wx, wy);
+    else if (S.tool === 'vertex') vertexDown(e, px, py, wx, wy, right);
+  } else if (S.tool === 'pipette') pipetteAt(wx, wy);
+  else paintDown(e, px, py, wx, wy, right);
+}
+
+cv.addEventListener('pointerdown', e => {
+  const r = cv.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
+  if (e.pointerType === 'pen') lastPen = performance.now();
+  if (e.pointerType === 'touch' && performance.now() - lastPen < 2500) return; // paume
+  try { cv.setPointerCapture(e.pointerId); } catch (_) { /* pointeur synthétique */ }
+  ptrs.set(e.pointerId, { x: px, y: py, type: e.pointerType });
+  const touches = [...ptrs.values()].filter(p => p.type === 'touch');
+  if (touches.length >= 2) {
+    abortAct();
+    const [a, b] = touches, d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+    const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+    gesture = { d0: d, s0: S.cam.s, g: s2w(cx, cy) };
+    return;
+  }
+  if (e.button === 1 || spaceDown || S.tool === 'hand') { act = { kind: 'pan', lx: px, ly: py }; cv.style.cursor = 'grabbing'; return; }
+  toolDown(e, px, py);
+});
+
+cv.addEventListener('pointermove', e => {
+  const r = cv.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
+  const [wx, wy] = s2w(px, py);
+  $('#coords').textContent = wx.toFixed(3) + '°  ' + wy.toFixed(3) + '°';
+  const pt = ptrs.get(e.pointerId);
+  if (pt) { pt.x = px; pt.y = py; }
+  if (gesture) {
+    const t = [...ptrs.values()].filter(p => p.type === 'touch');
+    if (t.length >= 2) {
+      const d = Math.hypot(t[0].x - t[1].x, t[0].y - t[1].y) || 1;
+      const cx = (t[0].x + t[1].x) / 2, cy = (t[0].y + t[1].y) / 2;
+      S.cam.s = clampS(gesture.s0 * d / gesture.d0);
+      S.cam.x = gesture.g[0] - (cx - W / 2) / S.cam.s;
+      S.cam.y = gesture.g[1] + (cy - H / 2) / S.cam.s;
+      need(true);
+    }
+    return;
+  }
+  if (!act) {
+    if (S.tool === 'cut' && S.view === 'prov' && cut.pts.length) { cut.hover = [wx, wy]; need(); }
+    else if (S.tool === 'poly' && S.view === 'prov' && pdraw.pts.length) { pdraw.hover = snapVertex(wx, wy) || [wx, wy]; need(); }
+    return;
+  }
+  switch (act.kind) {
+    case 'bgmove': case 'bgresize': bgMove(wx, wy); break;
+    case 'pan':
+      S.cam.x -= (px - act.lx) / S.cam.s; S.cam.y += (py - act.ly) / S.cam.s; act.lx = px; act.ly = py; need(true); break;
+    case 'cut': cutMove(px, py, wx, wy); break;
+    case 'paint': paintMove(wx, wy); break;
+    case 'vdrag':
+      for (const f of act.refs) { f.r[f.i] = wx; f.r[f.i + 1] = wy; }
+      act.moved = true;
+      for (const id of act.provIds) { const p = S.provs.get(id); if (p) { p._path = null; p._bb = null; } }
+      need(); break;
+  }
+});
+
+function endPointer(e) {
+  const r = cv.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
+  const [wx, wy] = s2w(px, py);
+  ptrs.delete(e.pointerId);
+  if (gesture) { if ([...ptrs.values()].filter(p => p.type === 'touch').length < 2) { gesture = null; need(); } return; }
+  if (!act) return;
+  const a = act; act = null;
+  cv.style.cursor = cursorFor();
+  if (a.kind === 'pan') need();
+  else if (a.kind === 'bgmove' || a.kind === 'bgresize') markDirty();
+  else if (a.kind === 'cut') { act = a; cutUp(px, py, wx, wy); act = null; }
+  else if (a.kind === 'paint') { if (a.changed) a.tx.commit(); }
+  else if (a.kind === 'vdrag') {
+    G.dragB = null; G.geomDirty = G.asgnDirty = true;
+    if (a.moved) a.tx.commit();
+    for (const id of a.provIds) { const p = S.provs.get(id); if (p) { p._path = null; p._bb = null; } }
+    need();
+  }
+}
+cv.addEventListener('pointerup', endPointer);
+cv.addEventListener('pointercancel', e => { ptrs.delete(e.pointerId); abortAct(); });
+cv.addEventListener('contextmenu', e => e.preventDefault());
+
+function abortAct() {
+  if (!act) { gesture = null; return; }
+  const a = act; act = null;
+  if (a.kind === 'cut') cutReset();
+  else if (a.kind === 'paint' && a.changed) a.tx.commit();
+  else if (a.kind === 'vdrag') { applyEnts([...a.tx.before].map(([id, b]) => ({ id, before: b, after: null })), false); G.dragB = null; }
+  need();
+}
+
+const clampS = s => Math.max(0.4, Math.min(60000, s));
+cv.addEventListener('wheel', e => {
+  e.preventDefault();
+  const r = cv.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
+  const g = s2w(px, py);
+  S.cam.s = clampS(S.cam.s * Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0016)));
+  S.cam.x = g[0] - (px - W / 2) / S.cam.s;
+  S.cam.y = g[1] + (py - H / 2) / S.cam.s;
+  wheelUntil = performance.now() + 220;
+  need(true);
+}, { passive: false });
+
+function cursorFor() { return spaceDown || S.tool === 'hand' ? 'grab' : S.tool === 'select' ? 'default' : 'crosshair'; }
+
+/* ===================================================================== clavier */
+window.addEventListener('keydown', e => {
+  if ($('#editor').hidden) return;
+  const tag = (e.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'select') { if (e.key === 'Escape' || e.key === 'Enter') e.target.blur(); return; }
+  const k = e.key.toLowerCase();
+  if ((e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+  if ((e.ctrlKey || e.metaKey) && k === 'y') { e.preventDefault(); redo(); return; }
+  if ((e.ctrlKey || e.metaKey) && k === 's') { e.preventDefault(); saveNow(); return; }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (k === ' ') { spaceDown = true; cv.style.cursor = 'grab'; e.preventDefault(); return; }
+  if (k === 'escape') { cutReset(); if (act) abortAct(); return; }
+  if (k === 'enter') { if (S.tool === 'poly') polyFinish(); else cutFinish(); return; }
+  if (k === 'f') { fitView(); return; }
+  if (k === 'l') { S.labels = !S.labels; need(); return; }
+  if (k === '/') { e.preventDefault(); $('#search').focus(); return; }
+  if (k === 'delete' || k === 'backspace') { if (S.view === 'prov') deleteSel(); return; }
+  if (['1', '2', '3', '4', '5'].includes(k)) { setView(['prov', 'country', 'region', 'terrain', 'bg'][+k - 1]); return; }
+  const map = S.view === 'prov'
+    ? { v: 'select', c: 'cut', m: 'merge', d: 'vertex', p: 'poly', h: 'hand' }
+    : S.view === 'bg' ? { b: 'bgmove', h: 'hand' }
+    : S.view === 'terrain' ? { t: 'paint', i: 'pipette', h: 'hand', a: 'paint' }
+    : { a: 'assign', i: 'pipette', h: 'hand' };
+  if (map[k]) { setTool(map[k]); return; }
+  if (S.view === 'terrain' && (k === '[' || k === ']')) { S.pen = (S.pen + (k === ']' ? 1 : TERRAINS.length - 1)) % TERRAINS.length; syncUI(); }
+});
+window.addEventListener('keyup', e => { if (e.key === ' ') { spaceDown = false; cv.style.cursor = cursorFor(); } });
+window.addEventListener('resize', resize);
+
+/* ===================================================================== interface */
+const VIEWS = [['prov', 'Provinces'], ['country', 'Pays'], ['region', 'Régions'], ['terrain', 'Terrain'], ['bg', 'Fonds']];
+const TOOLS = {
+  prov: [['select', '↖', 'Sélection', 'V'], ['cut', '✂', 'Découpe', 'C'], ['merge', '⊕', 'Fusion', 'M'], ['vertex', '◇', 'Sommets', 'D'], ['poly', '⬠', 'Polygone', 'P'], ['hand', '✋', 'Main', 'H']],
+  bg: [['bgmove', '⇲', 'Placer', 'B'], ['hand', '✋', 'Main', 'H']],
+  country: [['assign', '🖌', 'Assigner', 'A'], ['pipette', '💧', 'Pipette', 'I'], ['hand', '✋', 'Main', 'H']],
+  region: [['assign', '🖌', 'Assigner', 'A'], ['pipette', '💧', 'Pipette', 'I'], ['hand', '✋', 'Main', 'H']],
+  terrain: [['paint', '🖌', 'Stylo', 'T'], ['pipette', '💧', 'Pipette', 'I'], ['hand', '✋', 'Main', 'H']],
+};
+const HINTS = {
+  'prov:select': 'Clique une province pour la sélectionner et l’éditer.',
+  'prov:cut': 'Trace au stylet/souris à travers les terres, ou clique des points puis double-clic / Entrée. Dépasse de chaque côté. Clic droit = retire le dernier point, Échap annule.',
+  'prov:merge': 'Sélectionne une province, puis clique les voisines : elles sont absorbées par la première (la frontière commune disparaît).',
+  'prov:poly': 'Clique des points (ils s’accrochent aux sommets existants) ; ferme en recliquant le 1er point, double-clic ou Entrée. Dans une terre = trou (lac), dans le vide = nouvelle zone. Type : voir le panneau.',
+  'bg:bgmove': 'Choisis un fond dans le panneau, glisse-le pour le déplacer ; poignées dans les coins = redimensionner (ratio conservé).',
+  'prov:vertex': 'Glisse un sommet (les voisines suivent). Clique une arête de la province sélectionnée pour ajouter un sommet. Clic droit sur un sommet = supprime.',
+  'country:assign': 'Glisse sur les provinces pour les donner au pays actif. Clic droit = retirer.',
+  'region:assign': 'Glisse sur les provinces pour les donner à la région active. Clic droit = retirer.',
+  'terrain:paint': 'Glisse sur les provinces pour leur appliquer le terrain choisi. Clic droit = non défini. [ ] change de terrain.',
+};
+
+function setView(v) {
+  S.view = v; cutReset();
+  S.tool = TOOLS[v][0][0];
+  syncUI(); need();
+}
+function setTool(t) { if (!TOOLS[S.view].some(x => x[0] === t)) return; S.tool = t; cutReset(); syncUI(); need(); cv.style.cursor = cursorFor(); }
+
+function syncUI() {
+  // vues
+  $('#views').innerHTML = VIEWS.map(([k, n], i) => `<button data-v="${k}" class="${S.view === k ? 'on' : ''}" title="${i + 1}">${n}</button>`).join('');
+  for (const b of $('#views').children) b.onclick = () => setView(b.dataset.v);
+  // outils
+  $('#tools').innerHTML = TOOLS[S.view].map(([k, ic, n, key]) => `<button data-t="${k}" class="${S.tool === k ? 'on' : ''}" title="${n} (${key})"><i>${ic}</i><small>${n}</small></button>`).join('')
+    + (S.view === 'prov' ? '<hr><button id="bExplode" title="Éclater en parties"><i>✺</i><small>Éclater</small></button><button id="bDel" title="Supprimer (Suppr)"><i>🗑</i><small>Suppr.</small></button><button id="bOcean" title="Générer les mers/océans (complément des terres)"><i>🌊</i><small>Océans</small></button>' : '');
+  for (const b of $('#tools').querySelectorAll('[data-t]')) b.onclick = () => setTool(b.dataset.t);
+  if ($('#bExplode')) { $('#bExplode').onclick = explodeSel; $('#bDel').onclick = deleteSel; $('#bOcean').onclick = generateOcean; }
+  $('#bUndo').disabled = !S.undo.length; $('#bRedo').disabled = !S.redo.length;
+  $('#hint').textContent = HINTS[S.view + ':' + S.tool] || '';
+  $('#hint').hidden = !$('#hint').textContent;
+  renderPanel();
+}
+
+function opts(list, cur, none) {
+  return (none ? `<option value="0">${none}</option>` : '') + list.map(o => `<option value="${o.id}" ${o.id === cur ? 'selected' : ''}>${esc(o.name)}</option>`).join('');
+}
+const byName = m => [...m.values()].sort((a, b) => a.name.localeCompare(b.name));
+
+function renderPanel() {
+  const el = $('#panel');
+  if (S.view === 'prov') {
+    const p = S.provs.get(S.sel);
+    const kindHtml = S.tool === 'poly'
+      ? `<h3>Polygone libre</h3><div class="row"><label>Type</label><select id="pKind">${['sea', 'land', 'lake'].map(k => `<option value="${k}" ${S.newKind === k ? 'selected' : ''}>${{ sea: 'Mer', land: 'Terre', lake: 'Lac' }[k]}</option>`).join('')}</select></div>` : '';
+    const bindKind = () => { const k = $('#pKind'); if (k) k.onchange = e => { S.newKind = e.target.value; }; };
+    if (!p) { el.innerHTML = kindHtml + `<h3>Province</h3><div class="kv">${S.provs.size} provinces · ${S.countries.size} pays</div><div class="kv">Aucune sélection.</div>`; bindKind(); return; }
+    let nv = 0; for (const poly of p.polys) for (const r of poly) nv += r.length / 2;
+    el.innerHTML = kindHtml + `<h3>Province #${p.id}</h3>
+      <div class="row"><label>Nom</label><input type="text" id="pName" value="${esc(p.name)}"></div>
+      <div class="row"><label>Pays</label><select id="pCountry">${opts(byName(S.countries), p.country, '— aucun —')}</select></div>
+      <div class="row"><label>Région</label><select id="pRegion">${opts(byName(S.regions), p.region, '— aucune —')}</select></div>
+      <div class="row"><label>Terrain</label><select id="pTerr"><option value="${NOT_SET}">— non défini —</option>${TERRAINS.map((t, i) => `<option value="${i}" ${p.terrain === i ? 'selected' : ''}>${t[0]}</option>`).join('')}</select></div>
+      <div class="kv">${p.polys.length} partie${p.polys.length > 1 ? 's' : ''} · ${nv} sommets</div>`;
+    const edit = (fn) => { const tx = new Tx(); tx.touch(p); fn(); tx.commit(); G.asgnDirty = true; need(); };
+    $('#pName').onchange = e => edit(() => { p.name = e.target.value.trim() || p.name; });
+    $('#pCountry').onchange = e => edit(() => { p.country = +e.target.value; });
+    $('#pRegion').onchange = e => edit(() => { p.region = +e.target.value; });
+    $('#pTerr').onchange = e => edit(() => { p.terrain = +e.target.value; });
+    bindKind();
+  } else if (S.view === 'country' || S.view === 'region') {
+    const isC = S.view === 'country', map = isC ? S.countries : S.regions, cur = map.get(isC ? S.actC : S.actR);
+    const count = cur ? [...S.provs.values()].filter(p => (isC ? p.country : p.region) === cur.id).length : 0;
+    el.innerHTML = `<h3>${isC ? 'Pays' : 'Régions'}</h3>
+      <div class="row"><select id="cSel">${opts(byName(map), cur ? cur.id : 0, isC ? '— choisir —' : '— choisir —')}</select><button id="cAdd" title="Nouveau" style="flex:none">＋</button></div>
+      ${cur ? `<div class="row"><input type="color" id="cCol" value="${cur.color}"><input type="text" id="cName" value="${esc(cur.name)}"></div>
+      ${isC ? `<div class="row"><label>Code</label><input type="text" id="cTag" maxlength="4" value="${esc(cur.tag || '')}"></div>`
+            : `<div class="row"><label>Habitants</label><input type="number" id="cPop" min="0" value="${cur.pop || 0}"></div>`}
+      <div class="kv">${count} province${count > 1 ? 's' : ''}</div>
+      <div class="row"><button id="cGo">Voir</button><button id="cRen" title="Renomme ses provinces « Nom 1, Nom 2… » du nord au sud">Nommer les provinces</button></div>
+      <div class="row"><button id="cDel" class="danger">Supprimer ${isC ? 'ce pays' : 'cette région'}</button></div>` : ''}
+      ${isC ? '' : `<div class="row"><label style="width:auto"><input type="checkbox" id="cOv" ${S.overlayCountry ? 'checked' : ''}> pays en transparence</label></div>`}`;
+    $('#cSel').onchange = e => { if (isC) S.actC = +e.target.value; else S.actR = +e.target.value; syncUI(); };
+    $('#cAdd').onclick = () => {
+      if (isC) S.actC = addCountry('Nouveau pays', '');
+      else { const id = S.nextRegion++; S.regions.set(id, { id, name: 'Nouvelle région', color: C.autoColor(id * 5 + 2), pop: 0, notes: '' }); S.actR = id; }
+      markDirty(); syncUI();
+    };
+    if (cur) {
+      $('#cCol').oninput = e => { cur.color = e.target.value; need(); };
+      $('#cCol').onchange = markDirty;
+      $('#cName').onchange = e => { cur.name = e.target.value.trim() || cur.name; markDirty(); syncUI(); };
+      if (isC) $('#cTag').onchange = e => { cur.tag = e.target.value.trim().toUpperCase(); markDirty(); };
+      else $('#cPop').onchange = e => { cur.pop = +e.target.value || 0; markDirty(); };
+      $('#cGo').onclick = () => {
+        const bb = [Infinity, Infinity, -Infinity, -Infinity];
+        for (const p of S.provs.values()) if ((isC ? p.country : p.region) === cur.id) { const b = bbOf(p); bb[0] = Math.min(bb[0], b[0]); bb[1] = Math.min(bb[1], b[1]); bb[2] = Math.max(bb[2], b[2]); bb[3] = Math.max(bb[3], b[3]); }
+        if (isFinite(bb[0])) zoomTo(bb); else toast('Aucune province');
+      };
+      $('#cRen').onclick = () => renameBatch(isC ? 'country' : 'region', cur.id);
+      $('#cDel').onclick = () => {
+        const b = $('#cDel');
+        if (!b.dataset.sure) { b.dataset.sure = 1; b.textContent = 'Confirmer la suppression'; return; }
+        const tx = new Tx();
+        for (const p of S.provs.values()) if ((isC ? p.country : p.region) === cur.id) { tx.touch(p); if (isC) p.country = 0; else p.region = 0; }
+        tx.commit(); map.delete(cur.id); if (isC) S.actC = 0; else S.actR = 0;
+        G.asgnDirty = true; markDirty(); syncUI(); need();
+      };
+    }
+    const ov = $('#cOv'); if (ov) ov.onchange = e => { S.overlayCountry = e.target.checked; need(); };
+  } else if (S.view === 'bg') {
+    el.innerHTML = `<h3>Fonds de référence</h3>
+      ${S.bg.map((l, i) => `<div class="bgrow ${S.bgSel === i ? 'sel' : ''}" data-i="${i}">
+        <div class="row"><input type="checkbox" data-a="vis" ${l.visible ? 'checked' : ''} title="Visible"><input type="text" data-a="name" value="${esc(l.name)}">
+          <button data-a="up" title="Monter" style="flex:none;padding:4px 7px">▲</button><button data-a="down" title="Descendre" style="flex:none;padding:4px 7px">▼</button><button data-a="del" class="danger" title="Supprimer" style="flex:none;padding:4px 7px">×</button></div>
+        <div class="row"><label>Opacité</label><input type="range" min="0.05" max="1" step="0.05" value="${l.opacity}" data-a="op"></div></div>`).join('') || '<div class="kv">Aucun fond.</div>'}
+      <div class="row"><button id="bgAdd" ${S.bg.length >= 3 ? 'disabled' : ''}>＋ Ajouter une image (${S.bg.length}/3)</button></div>
+      <div class="row"><label>Provinces</label><input type="range" id="bgPA" min="0.1" max="1" step="0.05" value="${S.provAlpha}"></div>
+      <div class="kv">L’opacité des provinces laisse voir les fonds en dessous.</div>`;
+    for (const row of el.querySelectorAll('.bgrow')) {
+      const i = +row.dataset.i, l = S.bg[i];
+      row.onclick = ev => { if (ev.target.dataset.a) return; S.bgSel = i; syncUI(); need(); };
+      row.querySelector('[data-a=vis]').onchange = e => { l.visible = e.target.checked; markDirty(); need(); };
+      row.querySelector('[data-a=name]').onfocus = () => { S.bgSel = i; need(); };
+      row.querySelector('[data-a=name]').onchange = e => { l.name = e.target.value; markDirty(); };
+      row.querySelector('[data-a=op]').oninput = e => { l.opacity = +e.target.value; need(); };
+      row.querySelector('[data-a=op]').onchange = markDirty;
+      row.querySelector('[data-a=up]').onclick = () => { if (i < S.bg.length - 1) { [S.bg[i], S.bg[i + 1]] = [S.bg[i + 1], S.bg[i]]; if (S.bgSel === i) S.bgSel = i + 1; markDirty(); syncUI(); need(); } };
+      row.querySelector('[data-a=down]').onclick = () => { if (i > 0) { [S.bg[i], S.bg[i - 1]] = [S.bg[i - 1], S.bg[i]]; if (S.bgSel === i) S.bgSel = i - 1; markDirty(); syncUI(); need(); } };
+      row.querySelector('[data-a=del]').onclick = () => { S.bg.splice(i, 1); S.bgSel = Math.min(S.bgSel, S.bg.length - 1); markDirty(); syncUI(); need(); };
+    }
+    $('#bgAdd').onclick = () => { $('#imgfile').value = ''; $('#imgfile').click(); };
+    $('#bgPA').oninput = e => { S.provAlpha = +e.target.value; need(); };
+    $('#bgPA').onchange = markDirty;
+  } else {
+    el.innerHTML = `<h3>Terrain</h3><div class="terr">${TERRAINS.map((t, i) => `<button data-i="${i}" class="${S.pen === i ? 'on' : ''}"><b style="background:${t[1]}"></b>${t[0]}</button>`).join('')}</div>`;
+    for (const b of el.querySelectorAll('[data-i]')) b.onclick = () => { S.pen = +b.dataset.i; syncUI(); if (S.tool !== 'paint') setTool('paint'); };
+  }
+}
+
+/* ---------------------------------------------------------------- menu */
+function renderMenu() {
+  $('#menu').innerHTML = `
+    <button id="mSave">Sauvegarder maintenant</button>
+    <button id="mFile">Sauver le projet (.bopvec)</button>
+    <button id="mExport">Export complet (.zip : provinces, régions, pays)</button>
+    <button id="mBilan">Bilan et vérifications</button>
+    <button id="mOcean">Générer les mers / océans</button>
+    <button id="mCloud">☁ Cloud GitHub (sauvegarde partout)</button>
+    <label><input type="checkbox" id="mLab" ${S.labels ? 'checked' : ''}> Noms sur la carte (L)</label>
+    <div class="kv" style="margin:0 6px">Raccourcis : 1-4 vues · V C M D H outils · Espace = déplacer · F tout voir · Ctrl+Z / Y</div>`;
+  $('#mSave').onclick = () => { saveNow(); $('#menu').hidden = true; };
+  $('#mFile').onclick = () => { download(S.name.replace(/[^\w\-]+/g, '_') + '.bopvec', new Blob([JSON.stringify(serialize())], { type: 'application/json' })); $('#menu').hidden = true; };
+  $('#mExport').onclick = () => { exportAll(); $('#menu').hidden = true; };
+  $('#mBilan').onclick = () => { $('#menu').hidden = true; showBilan(); };
+  $('#mOcean').onclick = () => { $('#menu').hidden = true; generateOcean(); };
+  $('#mCloud').onclick = () => { $('#menu').hidden = true; showCloud(); };
+  $('#mLab').onchange = e => { S.labels = e.target.checked; need(); };
+}
+$('#bMenu').onclick = () => { const m = $('#menu'); m.hidden = !m.hidden; if (!m.hidden) renderMenu(); };
+$('#bUndo').onclick = undo; $('#bRedo').onclick = redo; $('#bFit').onclick = fitView;
+$('#bHome').onclick = async () => { if (S.dirty) await saveNow(); showHome(); };
+$('#pname').onchange = e => { S.name = e.target.value.trim() || 'Projet'; markDirty(); };
+$('#dlgX').onclick = () => { $('#dlg').hidden = true; };
+$('#dlg').onclick = e => { if (e.target.id === 'dlg') $('#dlg').hidden = true; };
+$('#imgfile').onchange = e => { const f = e.target.files[0]; if (f) addBgFromFile(f); };
+
+let sRes = [], sHl = 0;
+function renderSearch() {
+  const box = $('#sres');
+  sRes = searchResults($('#search').value);
+  sHl = 0;
+  box.hidden = !sRes.length;
+  box.innerHTML = sRes.map((r, i) => `<div data-i="${i}" class="${i === 0 ? 'hl' : ''}"><span>${esc(r.t)}</span><small>${r.s}</small></div>`).join('');
+  for (const d of box.children) d.onmousedown = ev => { ev.preventDefault(); pickResult(sRes[+d.dataset.i]); };
+}
+$('#search').oninput = renderSearch;
+$('#search').onfocus = renderSearch;
+$('#search').onblur = () => setTimeout(() => { $('#sres').hidden = true; }, 150);
+$('#search').onkeydown = e => {
+  if (e.key === 'Enter' && sRes.length) { e.preventDefault(); pickResult(sRes[sHl]); }
+  else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    sHl = (sHl + (e.key === 'ArrowDown' ? 1 : sRes.length - 1)) % Math.max(sRes.length, 1);
+    [...$('#sres').children].forEach((d, i) => d.classList.toggle('hl', i === sHl));
+  }
+};
+cv.addEventListener('pointerdown', () => { $('#menu').hidden = true; });
+
+/* ===================================================================== export */
+function download(name, blob) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+function exportAll() {
+  const r6 = v => Math.round(v * 1e6) / 1e6;
+  const ringOut = (r, ccw) => {
+    const pts = [];
+    for (let i = 0; i < r.length; i += 2) pts.push([r6(r[i]), r6(r[i + 1])]);
+    if ((C.ringArea(r) > 0) !== ccw) pts.reverse();
+    pts.push(pts[0].slice());
+    return pts;
+  };
+  const polysOut = p => p.polys.map(poly => poly.map((r, i) => ringOut(r, i === 0)));
+  const provs = [...S.provs.values()].sort((a, b) => a.id - b.id);
+  const typeOf = p => p.terrain === NOT_SET ? 'land' : TERRAINS[p.terrain][2];
+  const provJson = {
+    format: 1, projection: 'equirectangular', unit: 'degrees', coordinates: '[lon, lat]',
+    terrains: TERRAINS.map((t, i) => ({ id: i, name: t[0], type: t[2], color: t[1] })),
+    provinces: provs.map(p => {
+      const bb = bbOf(p);
+      return { id: p.id, name: p.name, color: p.color, country: p.country, region: p.region,
+        terrain: p.terrain === NOT_SET ? null : p.terrain, type: typeOf(p), bbox: bb.map(r6), polygons: polysOut(p) };
+    }),
+  };
+  const geo = {
+    type: 'FeatureCollection',
+    features: provs.map(p => ({ type: 'Feature',
+      properties: { id: p.id, name: p.name, country: p.country, region: p.region, terrain: p.terrain === NOT_SET ? null : TERRAINS[p.terrain][0], type: typeOf(p) },
+      geometry: { type: 'MultiPolygon', coordinates: polysOut(p) } })),
+  };
+  // régions : pays déduit (majoritaire)
+  const rmap = new Map();
+  for (const p of provs) if (p.region) { if (!rmap.has(p.region)) rmap.set(p.region, []); rmap.get(p.region).push(p); }
+  const regions = [...rmap].map(([rid, ps]) => {
+    const r = S.regions.get(rid) || { name: 'Région ' + rid, color: '#888', pop: 0, notes: '' };
+    const cnt = new Map(); for (const p of ps) cnt.set(p.country, (cnt.get(p.country) || 0) + 1);
+    const country = [...cnt].sort((a, b) => b[1] - a[1])[0][0];
+    return { id: rid, name: r.name, country, color: r.color, population: r.pop || 0, notes: r.notes || '', provinces: ps.map(p => p.id) };
+  });
+  const countries = [...S.countries.values()].map(c => ({
+    id: c.id, name: c.name, tag: c.tag || '', color: c.color,
+    regions: regions.filter(r => r.country === c.id).map(r => r.id),
+    provinces: provs.filter(p => p.country === c.id).map(p => p.id),
+  })).filter(c => c.provinces.length);
+  const enc = new TextEncoder(), j = o => enc.encode(JSON.stringify(o));
+  const date = new Date().toISOString().slice(0, 10), dir = 'bopvec_export_' + date + '/';
+  const zip = C.makeZip([
+    { name: dir + 'provinces.json', data: j(provJson) },
+    { name: dir + 'provinces.geojson', data: j(geo) },
+    { name: dir + 'regions.json', data: j({ regions }) },
+    { name: dir + 'countries.json', data: j({ countries }) },
+  ]);
+  download('bopvec_export_' + date + '.zip', new Blob([zip], { type: 'application/zip' }));
+  const issues = bilan().filter(c => c.warn && c.items.length).map(c => c.items.length + ' ' + c.t.toLowerCase());
+  toast('Export : ' + provs.length + ' provinces, ' + regions.length + ' régions, ' + countries.length + ' pays'
+    + (issues.length ? ' — attention : ' + issues.join(', ') + ' (menu → Bilan)' : ''));
+}
+
+/* ===================================================================== cloud GitHub
+   Sauvegarde des projets dans un dépôt GitHub (privé de préférence) : saves/<nom>.bopvec.gz.
+   Réglages (dépôt, branche, jeton) gardés dans localStorage de CET appareil ; le jeton ne part
+   que vers api.github.com. Le projet est identifié par son nom cloud + le sha de la dernière
+   version synchronisée : un conflit (autre appareil entre-temps) n'écrase jamais en silence. */
+const CLOUD = {
+  load() { try { return JSON.parse(localStorage.getItem('bopvec.cloud') || 'null'); } catch (_) { return null; } },
+  store(c) { try { localStorage.setItem('bopvec.cloud', JSON.stringify(c)); return true; } catch (_) { return false; } },
+  busy: false, timer: 0,
+};
+const slugify = s => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'projet';
+const cloudReady = () => { const c = CLOUD.load(); return !!(c && c.repo && c.token); };
+
+async function gzipStr(str) {
+  const cs = new CompressionStream('gzip'), w = cs.writable.getWriter();
+  w.write(new TextEncoder().encode(str)); w.close();
+  return new Uint8Array(await new Response(cs.readable).arrayBuffer());
+}
+async function gunzipBuf(buf) {
+  const ds = new DecompressionStream('gzip'), w = ds.writable.getWriter();
+  w.write(buf); w.close();
+  return new TextDecoder().decode(await new Response(ds.readable).arrayBuffer());
+}
+function toB64(u8) {
+  let s = '';
+  for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+function ghFetch(path, opt = {}) {
+  const c = CLOUD.load();
+  const base = (c.api || 'https://api.github.com').replace(/\/$/, '');
+  const headers = {
+    Authorization: 'Bearer ' + c.token,
+    Accept: opt.raw ? 'application/vnd.github.raw+json' : 'application/vnd.github+json',
+  };   // pas d'en-tête X-GitHub-Api-Version : un en-tête de moins à faire accepter par le CORS
+  if (opt.body) headers['Content-Type'] = 'application/json';
+  return fetch(base + '/repos/' + c.repo + path, { method: opt.method || 'GET', headers, body: opt.body });
+}
+const refQ = () => '?ref=' + encodeURIComponent((CLOUD.load().branch || 'main'));
+
+async function cloudTest() {
+  const r = await ghFetch('');
+  if (r.status === 401) throw new Error('jeton refusé (401)');
+  if (r.status === 404) throw new Error('dépôt introuvable ou jeton sans accès (404)');
+  if (!r.ok) throw new Error('GitHub ' + r.status);
+  const j = await r.json();
+  if (j.permissions && !j.permissions.push) throw new Error('le jeton n’a pas le droit d’écrire (Contents : Read and write)');
+  return j;
+}
+
+async function cloudList() {
+  const r = await ghFetch('/contents/saves' + refQ());
+  if (r.status === 404) return [];
+  if (!r.ok) throw new Error('GitHub ' + r.status);
+  const arr = await r.json();
+  return arr.filter(f => f.type === 'file' && f.name.endsWith('.bopvec.gz'));
+}
+
+async function cloudPush(manual) {
+  if (CLOUD.busy || !cloudReady() || !S.id) return false;
+  CLOUD.busy = true;
+  try {
+    const c = CLOUD.load();
+    if (!S.cloudName) S.cloudName = slugify(S.name);
+    const path = '/contents/saves/' + encodeURIComponent(S.cloudName) + '.bopvec.gz';
+    setSaved('☁ envoi…');
+    const content = toB64(await gzipStr(JSON.stringify(serialize())));
+    const put = sha => ghFetch(path, {
+      method: 'PUT',
+      body: JSON.stringify({ message: 'Sauvegarde « ' + S.name + ' » (' + S.provs.size + ' provinces)', content, branch: c.branch || 'main', ...(sha ? { sha } : {}) }),
+    });
+    let r = await put(S.cloudSha || undefined);
+    if (r.status === 409 || r.status === 422 || r.status === 404) {
+      const cur = await ghFetch(path + refQ());
+      if (cur.ok) {
+        const meta = await cur.json();
+        if (!manual) {
+          S.cloudConflict = true; setSaved('⚠ conflit cloud');
+          toast('Le cloud contient une autre version de ce projet : ouvre ☰ → Cloud pour choisir.');
+          return false;
+        }
+        if (!confirm('Le cloud contient une version différente de « ' + S.cloudName + ' » (autre appareil, ou autre projet du même nom).\nÉcraser le cloud avec cette version ?')) { setSaved('☁ envoi annulé'); return false; }
+        r = await put(meta.sha);
+      } else if (cur.status === 404) r = await put(undefined);
+    }
+    if (!r.ok) throw new Error(r.status === 401 ? 'jeton refusé' : r.status === 403 ? 'accès refusé (droits du jeton ?)' : 'GitHub ' + r.status);
+    const j = await r.json();
+    S.cloudSha = j.content.sha; S.cloudConflict = false;
+    await saveNow(true);
+    setSaved('☁ synchronisé ' + new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }));
+    return true;
+  } catch (e) {
+    setSaved('⚠ cloud : ' + e.message);
+    if (manual) toast('Envoi cloud impossible : ' + e.message);
+    return false;
+  } finally { CLOUD.busy = false; }
+}
+
+function cloudSchedule() {
+  const c = CLOUD.load();
+  if (!c || !c.auto || !cloudReady() || S.cloudConflict || $('#editor').hidden) return;
+  clearTimeout(CLOUD.timer);
+  CLOUD.timer = setTimeout(() => cloudPush(false), c.delay || 15000);
+}
+
+async function cloudCheck() {
+  if (!S.cloudName || !cloudReady()) return;
+  try {
+    const r = await ghFetch('/contents/saves/' + encodeURIComponent(S.cloudName) + '.bopvec.gz' + refQ());
+    if (!r.ok) return;
+    const j = await r.json();
+    if (j.sha !== S.cloudSha) { S.cloudConflict = true; setSaved('☁ version plus récente dans le cloud'); toast('Une autre version de ce projet existe dans le cloud (☰ → Cloud pour la récupérer).'); }
+    else setSaved('☁ à jour');
+  } catch (_) { /* hors ligne */ }
+}
+
+async function cloudOpen(item) {
+  try {
+    const existing = DB.db ? await DB.get('c_' + item.name.replace(/\.bopvec\.gz$/, '')).catch(() => null) : null;
+    if (existing && !confirm('Une copie locale de ce projet existe sur cet appareil. La remplacer par la version du cloud ?')) return;
+    busy(true, 'Téléchargement depuis GitHub…'); await tick();
+    const r = await ghFetch('/contents/' + item.path.split('/').map(encodeURIComponent).join('/') + refQ(), { raw: true });
+    if (!r.ok) throw new Error('GitHub ' + r.status);
+    const d = JSON.parse(await gunzipBuf(new Uint8Array(await r.arrayBuffer())));
+    deserialize(d);
+    S.cloudName = item.name.replace(/\.bopvec\.gz$/, ''); S.cloudSha = item.sha; S.cloudConflict = false;
+    S.id = 'c_' + S.cloudName;
+    busy(false); $('#dlg').hidden = true;
+    openEditor(true);
+    await saveNow(true);
+    setSaved('☁ à jour');
+  } catch (e) { busy(false); toast('Ouverture cloud impossible : ' + e.message); }
+}
+
+async function showCloud() {
+  const inEditor = !$('#editor').hidden && S.id;
+  const c = CLOUD.load() || { repo: '', branch: 'main', token: '', auto: true };
+  $('#dlgTitle').textContent = 'Cloud GitHub';
+  const body = $('#dlgBody');
+  body.innerHTML = `
+    <div class="kv">Tes projets sont sauvegardés dans un dépôt GitHub <b>privé</b> (fichiers <code>saves/*.bopvec.gz</code>) : tu reprends le même projet depuis n’importe quel appareil.</div>
+    <div class="row"><label>Dépôt</label><input type="text" id="clRepo" placeholder="farrey360/bop-saves" value="${esc(c.repo || '')}"></div>
+    <div class="row"><label>Branche</label><input type="text" id="clBranch" value="${esc(c.branch || 'main')}"></div>
+    <div class="row"><label>Jeton</label><input type="password" id="clToken" placeholder="github_pat_…" value="${esc(c.token || '')}" autocomplete="off"></div>
+    <div class="row"><label style="width:auto"><input type="checkbox" id="clAuto" ${c.auto !== false ? 'checked' : ''}> envoi automatique après chaque sauvegarde (~15 s)</label></div>
+    <div class="row"><button id="clSave">Enregistrer et tester la connexion</button></div>
+    <div id="clMsg" class="kv"></div>
+    <details ${c.token ? '' : 'open'}><summary>Comment créer le dépôt et le jeton (une fois)</summary>
+      <div class="kv" style="line-height:1.5">1. GitHub → <b>New repository</b> → nom <code>bop-saves</code> → <b>Private</b>.<br>
+      2. GitHub → Settings → Developer settings → <b>Fine-grained tokens</b> → Generate : accès <i>Only select repositories</i> = bop-saves ; permission <b>Contents : Read and write</b>.<br>
+      3. Colle ici <i>Dépôt</i> (<code>ton-compte/bop-saves</code>) et le <i>Jeton</i>. Sur chaque nouvel appareil, refais seulement l’étape 3.<br>
+      Le jeton reste dans ce navigateur et ne sert qu’à parler à api.github.com.</div></details>
+    <hr style="border:0;border-top:1px solid var(--line);margin:10px 0">
+    ${inEditor ? `<div class="row"><button id="clPush">Envoyer « ${esc(S.name)} » maintenant</button></div>
+      <div class="kv">Nom cloud : <b>${esc(S.cloudName || slugify(S.name))}</b>${S.cloudSha ? ' · lié au cloud' : ' · pas encore envoyé'}</div>` : ''}
+    <div class="row"><b>Projets dans le cloud</b><button id="clRefresh" style="flex:none">↻</button></div>
+    <div id="clList" class="chips" style="padding-left:0"><span class="kv">…</span></div>`;
+  const read = () => ({
+    repo: $('#clRepo').value.trim().replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, ''),
+    branch: $('#clBranch').value.trim() || 'main', token: $('#clToken').value.trim(), auto: $('#clAuto').checked,
+    api: (CLOUD.load() || {}).api, delay: (CLOUD.load() || {}).delay,
+  });
+  const msg = (t, bad) => { const m = $('#clMsg'); m.textContent = t; m.style.color = bad ? 'var(--danger)' : 'var(--ok)'; };
+  const refresh = async () => {
+    const box = $('#clList');
+    if (!cloudReady()) { box.innerHTML = '<span class="kv">Renseigne le dépôt et le jeton.</span>'; return; }
+    box.innerHTML = '<span class="kv">…</span>';
+    try {
+      const list = await cloudList();
+      box.innerHTML = list.length ? list.map((f, i) => `<button data-i="${i}">${esc(f.name.replace(/\.bopvec\.gz$/, ''))} · ${(f.size / 1e6).toFixed(1)} Mo</button>`).join('') : '<span class="kv">Aucune sauvegarde pour l’instant.</span>';
+      for (const b of box.querySelectorAll('button[data-i]')) b.onclick = () => cloudOpen(list[+b.dataset.i]);
+    } catch (e) { box.innerHTML = `<span class="kv" style="color:var(--danger)">${esc(e.message)}</span>`; }
+  };
+  $('#clSave').onclick = async () => {
+    const n = read();
+    if (!/^[\w.-]+\/[\w.-]+$/.test(n.repo)) return msg('Dépôt invalide : écris « compte/nom ».', true);
+    if (!n.token) return msg('Colle ton jeton.', true);
+    if (!CLOUD.store(n)) return msg('Impossible d’enregistrer les réglages (stockage du navigateur bloqué).', true);
+    msg('Test…');
+    try { const j = await cloudTest(); msg('Connexion OK : ' + j.full_name + (j.private ? ' (privé)' : ' — ATTENTION : dépôt PUBLIC, tes sauvegardes seraient visibles de tous'), j.private === false); S.cloudConflict = false; refresh(); }
+    catch (e) { msg(e.message, true); }
+  };
+  if ($('#clPush')) $('#clPush').onclick = async () => { CLOUD.store(read()); msg('Envoi…'); const ok = await cloudPush(true); msg(ok ? 'Envoyé.' : 'Échec (voir le message en haut).', !ok); refresh(); };
+  $('#clRefresh').onclick = refresh;
+  $('#dlg').hidden = false;
+  refresh();
+}
+
+/* ===================================================================== accueil / fichiers */
+let toastT = 0;
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 3200);
+}
+const busy = (on, msg) => { $('#busy').textContent = msg || 'Chargement…'; $('#busy').hidden = !on; };
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = src; s.onload = res; s.onerror = () => rej(new Error(src + ' introuvable'));
+    document.head.appendChild(s);
+  });
+}
+const tick = () => new Promise(r => setTimeout(r, 30));
+
+async function showHome() {
+  $('#editor').hidden = true; $('#home').hidden = false;
+  let list = [];
+  try { list = (await DB.list()).sort((a, b) => b.updated - a.updated); } catch (e) { /* stockage indisponible */ }
+  $('#projects').innerHTML = `
+    <div class="card new" id="cNewNE"><div class="plus">＋</div><b>Nouveau projet</b><span>Monde Natural Earth 50 m (terres, pays déjà séparés)</span></div>
+    <div class="card new" id="cCloud"><div class="plus">☁</div><b>Ouvrir depuis le cloud</b><span>Reprendre un projet sauvegardé sur GitHub</span></div>
+    <div class="card new" id="cNewNE10"><div class="plus">＋</div><b>Nouveau — détaillé (10 m)</b><span>Côtes et petites îles précises, plus lourd à charger</span></div>
+    <div class="card new" id="cImport"><div class="plus">⇪</div><b>Importer</b><span>.bopvec ou GeoJSON de ta carte</span></div>`
+    + list.map(m => `<div class="card" data-id="${m.id}">${m.thumb ? `<img src="${m.thumb}" alt="">` : '<img alt="">'}<button class="x" title="Supprimer">×</button>
+      <div class="meta"><b>${esc(m.name)}</b><span>${m.nProv} provinces · ${new Date(m.updated).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}</span></div></div>`).join('');
+  $('#cNewNE').onclick = async () => { busy(true); await tick(); loadNaturalEarth(); S.name = 'Monde ' + new Date().toLocaleDateString('fr-FR'); S.id = 'p' + Date.now().toString(36); busy(false); openEditor(true); markDirty(); };
+  $('#cCloud').onclick = showCloud;
+  $('#cNewNE10').onclick = async () => {
+    busy(true, 'Chargement de la carte 10 m… (quelques secondes)'); await tick();
+    try {
+      if (!window.NE10_COUNTRIES) await loadScript('ne10.js');
+      loadNaturalEarth(window.NE10_COUNTRIES);
+      S.name = 'Monde 10 m ' + new Date().toLocaleDateString('fr-FR'); S.id = 'p' + Date.now().toString(36);
+      busy(false); openEditor(true); markDirty();
+    } catch (err) { busy(false); toast('Carte 10 m indisponible : ' + err.message + ' (lance tools/build-ne.js, voir README)'); }
+  };
+  $('#cImport').onclick = () => { $('#file').value = ''; $('#file').click(); };
+  for (const c of $('#projects').querySelectorAll('.card[data-id]')) {
+    c.onclick = async ev => {
+      const id = c.dataset.id;
+      if (ev.target.classList.contains('x')) {
+        if (!confirm('Supprimer ce projet ?')) return;
+        await DB.del(id); showHome(); return;
+      }
+      busy(true); await tick();
+      const rec = await DB.get(id); deserialize(rec.data); S.id = id; busy(false); openEditor(true);
+    };
+  }
+}
+
+$('#file').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  busy(true); await tick();
+  try {
+    const d = JSON.parse(await f.text());
+    if (d.provinces && d.format) { deserialize(d); S.name = d.name || f.name.replace(/\.\w+$/, ''); }
+    else if (d.features) { loadGeoJSON(d); S.name = f.name.replace(/\.\w+$/, ''); }
+    else throw new Error('Format inconnu');
+    S.id = 'p' + Date.now().toString(36);
+    busy(false); openEditor(true); markDirty();
+  } catch (err) { busy(false); toast('Import impossible : ' + err.message); }
+};
+
+function openEditor(fit) {
+  $('#home').hidden = true; $('#editor').hidden = false;
+  S.view = 'prov'; S.tool = 'select'; S.sel = 0; S.dirty = false; setSaved('');
+  $('#pname').value = S.name;
+  G.geomDirty = G.asgnDirty = true;
+  resize();
+  if (fit) fitView();
+  syncUI(); need();
+  cloudCheck();
+}
+
+/* ===================================================================== démarrage */
+(async function init() {
+  try {
+    await Promise.race([DB.open(), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 2500))]);
+  } catch (e) { DB.db = null; console.warn('IndexedDB indisponible', e); }
+  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
+  window.addEventListener('beforeunload', ev => { if (S.dirty && DB.db) { saveNow(); } });
+  showHome();
+})();
+</script>
+</body>
+</html>
