@@ -22,7 +22,7 @@ button:active{background:#2a2e3a}
 button.on{background:var(--accent);border-color:var(--accent);color:#06121f}
 button.danger{color:var(--danger)}
 button:disabled{opacity:.35;cursor:default}
-input[type=text],input[type=number],select{background:#0f1117;border:1px solid var(--line);border-radius:7px;padding:6px 8px;width:100%;min-width:0}
+input[type=text],input[type=number],input[type=password],select{background:#0f1117;border:1px solid var(--line);border-radius:7px;padding:6px 8px;width:100%;min-width:0}
 input[type=color]{width:38px;height:32px;padding:2px;background:#0f1117;border:1px solid var(--line);border-radius:7px;flex:none}
 [hidden]{display:none!important}
 
@@ -1695,7 +1695,7 @@ async function showCloud() {
       Le jeton reste dans ce navigateur et ne sert qu’à parler à api.github.com.</div></details>
     <hr style="border:0;border-top:1px solid var(--line);margin:10px 0">
     ${inEditor ? `<div class="row"><button id="clPush">Envoyer « ${esc(S.name)} » maintenant</button></div>
-      <div class="kv">Nom cloud : <b>${esc(S.cloudName || slugify(S.name))}</b>${S.cloudSha ? ' · lié au cloud' : ' · pas encore envoyé'}</div>` : ''}
+      <div class="kv" id="clState">Nom cloud : <b>${esc(S.cloudName || slugify(S.name))}</b>${S.cloudSha ? ' · lié au cloud' : ' · pas encore envoyé'}</div>` : ''}
     <div class="row"><b>Projets dans le cloud</b><button id="clRefresh" style="flex:none">↻</button></div>
     <div id="clList" class="chips" style="padding-left:0"><span class="kv">…</span></div>`;
   const read = () => ({
@@ -1723,7 +1723,9 @@ async function showCloud() {
     try { const j = await cloudTest(); msg('Connexion OK : ' + j.full_name + (j.private ? ' (privé)' : ' — ATTENTION : dépôt PUBLIC, tes sauvegardes seraient visibles de tous'), j.private === false); S.cloudConflict = false; refresh(); }
     catch (e) { msg(e.message, true); }
   };
-  if ($('#clPush')) $('#clPush').onclick = async () => { CLOUD.store(read()); msg('Envoi…'); const ok = await cloudPush(true); msg(ok ? 'Envoyé.' : 'Échec (voir le message en haut).', !ok); refresh(); };
+  if ($('#clPush')) $('#clPush').onclick = async () => { CLOUD.store(read()); msg('Envoi…'); const ok = await cloudPush(true); msg(ok ? 'Envoyé.' : 'Échec (voir le message en haut).', !ok);
+    const st = $('#clState'); if (st && S.cloudSha) st.innerHTML = 'Nom cloud : <b>' + esc(S.cloudName) + '</b> · lié au cloud';
+    setTimeout(refresh, 1500); };
   $('#clRefresh').onclick = refresh;
   $('#dlg').hidden = false;
   refresh();
