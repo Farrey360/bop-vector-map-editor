@@ -1580,8 +1580,9 @@ window.addEventListener('keydown', e => {
   if (k === '/') { e.preventDefault(); $('#search').focus(); return; }
   if (k === 'delete' || k === 'backspace') { if (S.view === 'prov') deleteSel(); return; }
   if (['1', '2', '3', '4', '5'].includes(k)) { setView(['prov', 'country', 'region', 'terrain', 'bg'][+k - 1]); return; }
+  if (k === 'z' && S.view === 'prov') { explodeSel(); return; }
   const map = S.view === 'prov'
-    ? { v: 'select', c: 'cut', m: 'merge', d: 'vertex', w: 'weld', p: 'poly', f: 'fill', h: 'hand' }
+    ? { a: 'select', c: 'cut', e: 'merge', d: 'vertex', w: 'weld', p: 'poly', f: 'fill', h: 'hand' }
     : S.view === 'bg' ? { b: 'bgmove', h: 'hand' }
     : S.view === 'terrain' ? { t: 'paint', i: 'pipette', h: 'hand', a: 'paint' }
     : { a: 'assign', i: 'pipette', h: 'hand' };
@@ -1595,7 +1596,7 @@ window.addEventListener('resize', resize);
 /* ===================================================================== interface */
 const VIEWS = [['prov', 'Provinces'], ['country', 'Pays'], ['region', 'Régions'], ['terrain', 'Terrain'], ['bg', 'Fonds']];
 const TOOLS = {
-  prov: [['select', '↖', 'Sélection', 'V'], ['cut', '✂', 'Découpe', 'C'], ['merge', '⊕', 'Fusion', 'M'], ['vertex', '◇', 'Sommets', 'D'], ['weld', '◎', 'Pinceau', 'W'], ['poly', '⬠', 'Polygone', 'P'], ['hand', '✋', 'Main', 'H']],
+  prov: [['select', '↖', 'Sélection', 'A'], ['cut', '✂', 'Découpe', 'C'], ['merge', '⊕', 'Fusion', 'E'], ['vertex', '◇', 'Sommets', 'D'], ['weld', '◎', 'Pinceau', 'W'], ['poly', '⬠', 'Polygone', 'P'], ['hand', '✋', 'Main', 'H']],
   bg: [['bgmove', '⇲', 'Placer', 'B'], ['hand', '✋', 'Main', 'H']],
   country: [['assign', '🖌', 'Assigner', 'A'], ['pipette', '💧', 'Pipette', 'I'], ['hand', '✋', 'Main', 'H']],
   region: [['assign', '🖌', 'Assigner', 'A'], ['pipette', '💧', 'Pipette', 'I'], ['hand', '✋', 'Main', 'H']],
@@ -1605,7 +1606,7 @@ const HINTS = {
   'prov:select': 'Clique une province pour la sélectionner et l’éditer.',
   'prov:cut': 'Trace au stylet/souris à travers les terres, ou clique des points puis double-clic / Entrée. Dépasse de chaque côté. Clic droit = retire le dernier point, Échap annule.',
   'prov:merge': 'Sélectionne une province, puis clique les voisines : elles sont absorbées par la première (la frontière commune disparaît).',
-  'prov:fill': 'Clique dans une zone vide entre des provinces : une province prend exactement la forme du vide (type : voir le panneau). Reclique sur Remplir (ou V) pour quitter.',
+  'prov:fill': 'Clique dans une zone vide entre des provinces : une province prend exactement la forme du vide (type : voir le panneau). Reclique sur Remplir (ou A) pour quitter.',
   'prov:poly': 'Clique des points (ils s’accrochent aux sommets existants) ; ferme en recliquant le 1er point, double-clic ou Entrée. Dans une terre = trou (lac), dans le vide = nouvelle zone. Type : voir le panneau.',
   'prov:weld': 'Pinceau (action au choix dans le panneau) — Fusionner : clique ou glisse, tous les sommets sous le cercle fusionnent en un seul (voisines incluses). Supprimer : reste cliqué et passe sur les provinces pour les sélectionner (rouge), relâche = suppression. [ ] ou le curseur du panneau = taille. Annuler = Ctrl+Z.',
   'bg:bgmove': 'Choisis un fond dans le panneau, glisse-le pour le déplacer ; poignées dans les coins = redimensionner (ratio conservé).',
@@ -1628,7 +1629,7 @@ function syncUI() {
   for (const b of $('#views').children) b.onclick = () => setView(b.dataset.v);
   // outils
   $('#tools').innerHTML = TOOLS[S.view].map(([k, ic, n, key]) => `<button data-t="${k}" class="${S.tool === k ? 'on' : ''}" title="${n} (${key})"><i>${ic}</i><small>${n}</small></button>`).join('')
-    + (S.view === 'prov' ? '<hr><button id="bExplode" title="Éclater en parties"><i>✺</i><small>Éclater</small></button><button id="bDel" title="Supprimer (Suppr)"><i>🗑</i><small>Suppr.</small></button><button id="bOcean" title="Générer les mers/océans (complément des terres)"><i>🌊</i><small>Océans</small></button><button id="bFill" class="' + (S.tool === 'fill' ? 'on' : '') + '" title="Remplir une zone vide d’un clic (F)"><i>🪣</i><small>Remplir</small></button>' : '');
+    + (S.view === 'prov' ? '<hr><button id="bExplode" title="Éclater en parties (Z)"><i>✺</i><small>Éclater</small></button><button id="bDel" title="Supprimer (Suppr)"><i>🗑</i><small>Suppr.</small></button><button id="bOcean" title="Générer les mers/océans (complément des terres)"><i>🌊</i><small>Océans</small></button><button id="bFill" class="' + (S.tool === 'fill' ? 'on' : '') + '" title="Remplir une zone vide d’un clic (F)"><i>🪣</i><small>Remplir</small></button>' : '');
   for (const b of $('#tools').querySelectorAll('[data-t]')) b.onclick = () => setTool(b.dataset.t);
   if ($('#bExplode')) { $('#bExplode').onclick = explodeSel; $('#bDel').onclick = deleteSel; $('#bOcean').onclick = generateOcean; $('#bFill').onclick = () => setTool(S.tool === 'fill' ? 'select' : 'fill'); }
   $('#bUndo').disabled = !S.undo.length; $('#bRedo').disabled = !S.redo.length;
