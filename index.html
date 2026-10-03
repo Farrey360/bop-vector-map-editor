@@ -166,7 +166,7 @@ const S = {
   id: null, name: '', provs: new Map(), countries: new Map(), regions: new Map(),
   nextProv: 1, nextCountry: 1, nextRegion: 1,
   view: 'prov', tool: 'select', sel: 0, actC: 0, actR: 0, pen: 0,
-  overlayCountry: true, labels: false, provAlpha: 1, newKind: 'sea',
+  overlayCountry: true, labels: false, provAlpha: 1, newKind: 'sea', fillKind: 'land',
   bg: [], bgSel: -1,
   cam: { x: 0, y: 15, s: 3 }, undo: [], redo: [], dirty: false,
 };
@@ -906,12 +906,12 @@ function fillDown(wx, wy) {
     }
   } catch (err) { toast('Échec du remplissage : ' + err.message); return; }
   if (C.polysArea([piece]) < 1e-9) { toast('Zone trop petite'); return; }
-  const kind = S.newKind, tx = new Tx();
-  const np = addProvince(freshName(KIND_NAME[kind]), [piece.map((r, i) => C.orientRing(r, i === 0))], 0);
+  const kind = S.fillKind, tx = new Tx();
+  const np = addProvince(freshName(kind === 'land' ? 'Province' : KIND_NAME[kind]), [piece.map((r, i) => C.orientRing(r, i === 0))], 0);
   np.terrain = KIND_TERRAIN[kind]; tx.born(np);
   if (kind === 'sea') np.color = seaColor(np.id); else if (kind === 'lake') np.color = '#cfe3f2';
   S.sel = np.id; tx.commit(); G.geomDirty = G.asgnDirty = true; need(); syncUI();
-  toast(KIND_NAME[kind] + ' créé(e) : ' + piece[0].length / 2 + ' sommets' + (piece.length > 1 ? ', ' + (piece.length - 1) + ' trou(s)' : ''));
+  toast((kind === 'land' ? 'Province' : KIND_NAME[kind]) + ' créée : ' + piece[0].length / 2 + ' sommets' + (piece.length > 1 ? ', ' + (piece.length - 1) + ' trou(s)' : ''));
 }
 
 function generateOcean() {
@@ -1584,10 +1584,10 @@ function renderPanel() {
   if (S.view === 'prov') {
     const p = S.provs.get(S.sel);
     const kindHtml = S.tool === 'poly' || S.tool === 'fill'
-      ? `<h3>${S.tool === 'fill' ? 'Remplir une zone vide' : 'Polygone libre'}</h3><div class="row"><label>Type</label><select id="pKind">${['sea', 'land', 'lake'].map(k => `<option value="${k}" ${S.newKind === k ? 'selected' : ''}>${{ sea: 'Mer', land: 'Terre', lake: 'Lac' }[k]}</option>`).join('')}</select></div>`
+      ? `<h3>${S.tool === 'fill' ? 'Remplir une zone vide' : 'Polygone libre'}</h3><div class="row"><label>Type</label><select id="pKind">${['sea', 'land', 'lake'].map(k => `<option value="${k}" ${(S.tool === 'fill' ? S.fillKind : S.newKind) === k ? 'selected' : ''}>${{ sea: 'Mer', land: 'Province (terre)', lake: 'Lac' }[k]}</option>`).join('')}</select></div>`
       : S.tool === 'weld' ? `<h3>Pinceau de fusion</h3><div class="row"><label>Rayon</label><input type="range" id="wRad" min="4" max="120" value="${brush.r}"><span class="kv" id="wRadV">${brush.r}px</span></div>` : '';
     const bindKind = () => {
-      const k = $('#pKind'); if (k) k.onchange = e => { S.newKind = e.target.value; };
+      const k = $('#pKind'); if (k) k.onchange = e => { if (S.tool === 'fill') S.fillKind = e.target.value; else S.newKind = e.target.value; };
       const w = $('#wRad'); if (w) w.oninput = e => { brush.r = +e.target.value; $('#wRadV').textContent = brush.r + 'px'; need(); };
     };
     if (!p) { el.innerHTML = kindHtml + `<h3>Province</h3><div class="kv">${S.provs.size} provinces · ${S.countries.size} pays</div><div class="kv">Aucune sélection.</div>`; bindKind(); return; }
