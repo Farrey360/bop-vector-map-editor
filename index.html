@@ -584,6 +584,10 @@ function draw() {
   if (snap.width !== cv.width || snap.height !== cv.height) { snap.width = cv.width; snap.height = cv.height; }
   snap.getContext('2d').drawImage(cv, 0, 0);
   snapCam = { x: S.cam.x, y: S.cam.y, s: S.cam.s };
+  if (S.view === 'prov' && S.tool === 'weld' && brush.x !== null) {
+    ctx.strokeStyle = '#ff3b3b'; ctx.lineWidth = 2; ctx.fillStyle = '#ff3b3b22';
+    ctx.beginPath(); ctx.arc(brush.x, brush.y, brush.r, 0, 6.2832); ctx.fill(); ctx.stroke();
+  }
 }
 
 function makeThumb() {
@@ -1225,6 +1229,52 @@ function deleteVertices(refs) {
   if (n) tx.commit(); else toast('Sommet nécessaire (3 minimum)');
 }
 
+/* pinceau de fusion : tous les sommets sous le cercle sont fondus en un seul (barycentre).
+   Un contour qui s'effondrerait (moins de 3 sommets restants) est épargné. */
+const brush = { r: 18, x: null, y: null };   // rayon en pixels écran
+function weldAt(wx, wy, tx) {
+  const r = brush.r / S.cam.s, r2 = r * r;
+  const key = (x, y) => Math.round(x * 1e8) + ',' + Math.round(y * 1e8);
+  const hits = [];
+  for (const p of S.provs.values()) {
+    const bb = bbOf(p);
+    if (wx < bb[0] - r || wx > bb[2] + r || wy < bb[1] - r || wy > bb[3] + r) continue;
+    for (const poly of p.polys) for (const ring of poly) {
+      const idx = [];
+      for (let i = 0; i < ring.length; i += 2) { const dx = ring[i] - wx, dy = ring[i + 1] - wy; if (dx * dx + dy * dy <= r2) idx.push(i); }
+      if (idx.length) hits.push({ p, ring, idx });
+    }
+  }
+  const prot = new Set();
+  for (const h of hits) if (h.ring.length / 2 - h.idx.length < 2) for (const i of h.idx) prot.add(key(h.ring[i], h.ring[i + 1]));
+  const pos = new Map();
+  for (const h of hits) for (const i of h.idx) { const k = key(h.ring[i], h.ring[i + 1]); if (!prot.has(k) && !pos.has(k)) pos.set(k, [h.ring[i], h.ring[i + 1]]); }
+  if (pos.size < 2) return 0;
+  let sx = 0, sy = 0;
+  for (const [x, y] of pos.values()) { sx += x; sy += y; }
+  const tx_ = sx / pos.size, ty_ = sy / pos.size, ids = new Set();
+  for (const h of hits) {
+    let touched = false;
+    for (const i of h.idx) {
+      if (prot.has(key(h.ring[i], h.ring[i + 1]))) continue;
+      if (!touched) { tx.touch(h.p); touched = true; }
+      h.ring[i] = tx_; h.ring[i + 1] = ty_;
+    }
+    if (touched) ids.add(h.p.id);
+  }
+  dedupeRings(ids);
+  return pos.size;
+}
+function weldDown(wx, wy) {
+  act = { kind: 'weld', tx: new Tx(), n: 0, lx: wx, ly: wy };
+  act.n += weldAt(wx, wy, act.tx);
+}
+function weldMove(wx, wy) {
+  if (Math.hypot(wx - act.lx, wy - act.ly) * S.cam.s < brush.r * 0.4) return;
+  act.lx = wx; act.ly = wy;
+  act.n += weldAt(wx, wy, act.tx);
+}
+
 /* ===================================================================== outils : assignation / pipette / terrain */
 function paintApply(p, right) {
   const t = act.tx;
@@ -1274,6 +1324,7 @@ function toolDown(e, px, py) {
     else if (S.tool === 'cut') cutDown(e, px, py, wx, wy, right);
     else if (S.tool === 'merge') mergeClick(wx, wy);
     else if (S.tool === 'vertex') vertexDown(e, px, py, wx, wy, right);
+    else if (S.tool === 'weld' && !right) weldDown(wx, wy);
   } else if (S.tool === 'pipette') pipetteAt(wx, wy);
   else paintDown(e, px, py, wx, wy, right);
 }
@@ -1314,6 +1365,7 @@ cv.addEventListener('pointermove', e => {
     }
     return;
   }
+  if (S.tool === 'weld' && S.view === 'prov') { brush.x = px; brush.y = py; if (!act) need(); }
   if (!act) {
     if (S.tool === 'cut' && S.view === 'prov' && cut.pts.length) { cut.hover = [wx, wy]; need(); }
     else if (S.tool === 'poly' && S.view === 'prov' && pdraw.pts.length) { pdraw.hover = snapVertex(wx, wy) || [wx, wy]; need(); }
@@ -1325,6 +1377,7 @@ cv.addEventListener('pointermove', e => {
       S.cam.x -= (px - act.lx) / S.cam.s; S.cam.y += (py - act.ly) / S.cam.s; act.lx = px; act.ly = py; need(true); break;
     case 'cut': cutMove(px, py, wx, wy); break;
     case 'paint': paintMove(wx, wy); break;
+    case 'weld': weldMove(wx, wy); need(); break;
     case 'vdrag': {
       // accroche à un autre sommet (hors ceux qu'on déplace) : lâcher dessus = fusion
       const sn = snapExcluding(wx, wy, act.refs);
@@ -1350,6 +1403,7 @@ function endPointer(e) {
   else if (a.kind === 'bgmove' || a.kind === 'bgresize') markDirty();
   else if (a.kind === 'cut') { act = a; cutUp(px, py, wx, wy); act = null; }
   else if (a.kind === 'paint') { if (a.changed) a.tx.commit(); }
+  else if (a.kind === 'weld') { if (a.tx.commit()) toast(a.n + ' sommets fusionnés'); else toast('Rien à fusionner sous le pinceau'); G.geomDirty = G.asgnDirty = true; need(); }
   else if (a.kind === 'vdrag') {
     G.dragB = null; G.geomDirty = G.asgnDirty = true;
     if (a.snap) { dedupeRings(a.provIds); toast('Sommets fusionnés'); }
@@ -1367,6 +1421,7 @@ function abortAct() {
   const a = act; act = null;
   if (a.kind === 'cut') cutReset();
   else if (a.kind === 'paint' && a.changed) a.tx.commit();
+  else if (a.kind === 'weld') applyEnts([...a.tx.before].map(([id, b]) => ({ id, before: b, after: null })), false);
   else if (a.kind === 'vdrag') { applyEnts([...a.tx.before].map(([id, b]) => ({ id, before: b, after: null })), false); G.dragB = null; }
   need();
 }
@@ -1404,11 +1459,12 @@ window.addEventListener('keydown', e => {
   if (k === 'delete' || k === 'backspace') { if (S.view === 'prov') deleteSel(); return; }
   if (['1', '2', '3', '4', '5'].includes(k)) { setView(['prov', 'country', 'region', 'terrain', 'bg'][+k - 1]); return; }
   const map = S.view === 'prov'
-    ? { v: 'select', c: 'cut', m: 'merge', d: 'vertex', p: 'poly', h: 'hand' }
+    ? { v: 'select', c: 'cut', m: 'merge', d: 'vertex', w: 'weld', p: 'poly', h: 'hand' }
     : S.view === 'bg' ? { b: 'bgmove', h: 'hand' }
     : S.view === 'terrain' ? { t: 'paint', i: 'pipette', h: 'hand', a: 'paint' }
     : { a: 'assign', i: 'pipette', h: 'hand' };
   if (map[k]) { setTool(map[k]); return; }
+  if (S.view === 'prov' && S.tool === 'weld' && (k === '[' || k === ']')) { brush.r = Math.max(4, Math.min(120, Math.round(brush.r * (k === ']' ? 1.25 : 0.8)))); syncUI(); need(); return; }
   if (S.view === 'terrain' && (k === '[' || k === ']')) { S.pen = (S.pen + (k === ']' ? 1 : TERRAINS.length - 1)) % TERRAINS.length; syncUI(); }
 });
 window.addEventListener('keyup', e => { if (e.key === ' ') { spaceDown = false; cv.style.cursor = cursorFor(); } });
@@ -1417,7 +1473,7 @@ window.addEventListener('resize', resize);
 /* ===================================================================== interface */
 const VIEWS = [['prov', 'Provinces'], ['country', 'Pays'], ['region', 'Régions'], ['terrain', 'Terrain'], ['bg', 'Fonds']];
 const TOOLS = {
-  prov: [['select', '↖', 'Sélection', 'V'], ['cut', '✂', 'Découpe', 'C'], ['merge', '⊕', 'Fusion', 'M'], ['vertex', '◇', 'Sommets', 'D'], ['poly', '⬠', 'Polygone', 'P'], ['hand', '✋', 'Main', 'H']],
+  prov: [['select', '↖', 'Sélection', 'V'], ['cut', '✂', 'Découpe', 'C'], ['merge', '⊕', 'Fusion', 'M'], ['vertex', '◇', 'Sommets', 'D'], ['weld', '◎', 'Pinceau', 'W'], ['poly', '⬠', 'Polygone', 'P'], ['hand', '✋', 'Main', 'H']],
   bg: [['bgmove', '⇲', 'Placer', 'B'], ['hand', '✋', 'Main', 'H']],
   country: [['assign', '🖌', 'Assigner', 'A'], ['pipette', '💧', 'Pipette', 'I'], ['hand', '✋', 'Main', 'H']],
   region: [['assign', '🖌', 'Assigner', 'A'], ['pipette', '💧', 'Pipette', 'I'], ['hand', '✋', 'Main', 'H']],
@@ -1428,6 +1484,7 @@ const HINTS = {
   'prov:cut': 'Trace au stylet/souris à travers les terres, ou clique des points puis double-clic / Entrée. Dépasse de chaque côté. Clic droit = retire le dernier point, Échap annule.',
   'prov:merge': 'Sélectionne une province, puis clique les voisines : elles sont absorbées par la première (la frontière commune disparaît).',
   'prov:poly': 'Clique des points (ils s’accrochent aux sommets existants) ; ferme en recliquant le 1er point, double-clic ou Entrée. Dans une terre = trou (lac), dans le vide = nouvelle zone. Type : voir le panneau.',
+  'prov:weld': 'Pinceau de fusion : clique ou glisse, tous les sommets sous le cercle fusionnent en un seul (voisines incluses). [ ] ou le curseur du panneau = taille. Annuler = Ctrl+Z.',
   'bg:bgmove': 'Choisis un fond dans le panneau, glisse-le pour le déplacer ; poignées dans les coins = redimensionner (ratio conservé).',
   'prov:vertex': 'Glisse un sommet (les voisines suivent) ; lâche-le sur un autre sommet (cercle rouge) pour les fusionner. Clique une arête de la province sélectionnée pour ajouter un sommet. Clic droit sur un sommet = supprime.',
   'country:assign': 'Glisse sur les provinces pour les donner au pays actif. Clic droit = retirer.',
@@ -1467,8 +1524,12 @@ function renderPanel() {
   if (S.view === 'prov') {
     const p = S.provs.get(S.sel);
     const kindHtml = S.tool === 'poly'
-      ? `<h3>Polygone libre</h3><div class="row"><label>Type</label><select id="pKind">${['sea', 'land', 'lake'].map(k => `<option value="${k}" ${S.newKind === k ? 'selected' : ''}>${{ sea: 'Mer', land: 'Terre', lake: 'Lac' }[k]}</option>`).join('')}</select></div>` : '';
-    const bindKind = () => { const k = $('#pKind'); if (k) k.onchange = e => { S.newKind = e.target.value; }; };
+      ? `<h3>Polygone libre</h3><div class="row"><label>Type</label><select id="pKind">${['sea', 'land', 'lake'].map(k => `<option value="${k}" ${S.newKind === k ? 'selected' : ''}>${{ sea: 'Mer', land: 'Terre', lake: 'Lac' }[k]}</option>`).join('')}</select></div>`
+      : S.tool === 'weld' ? `<h3>Pinceau de fusion</h3><div class="row"><label>Rayon</label><input type="range" id="wRad" min="4" max="120" value="${brush.r}"><span class="kv" id="wRadV">${brush.r}px</span></div>` : '';
+    const bindKind = () => {
+      const k = $('#pKind'); if (k) k.onchange = e => { S.newKind = e.target.value; };
+      const w = $('#wRad'); if (w) w.oninput = e => { brush.r = +e.target.value; $('#wRadV').textContent = brush.r + 'px'; need(); };
+    };
     if (!p) { el.innerHTML = kindHtml + `<h3>Province</h3><div class="kv">${S.provs.size} provinces · ${S.countries.size} pays</div><div class="kv">Aucune sélection.</div>`; bindKind(); return; }
     let nv = 0; for (const poly of p.polys) for (const r of poly) nv += r.length / 2;
     el.innerHTML = kindHtml + `<h3>Province #${p.id}</h3>
