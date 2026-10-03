@@ -770,6 +770,16 @@ function freshName(base) {
   return base + ' ' + (max + 1);
 }
 
+/* Nom d'une nouvelle province terre : suite du plus grand numéro final des provinces terre (8666 → « Province 8667 »). */
+function nextLandName() {
+  let max = 0;
+  for (const p of S.provs.values()) {
+    if (p.terrain === KIND_TERRAIN.sea || p.terrain === KIND_TERRAIN.lake) continue;
+    const m = /(\d+)\s*$/.exec(p.name); if (m) max = Math.max(max, +m[1]);
+  }
+  return 'Province ' + (Math.max(max, S.provs.size) + 1);
+}
+
 function snapVertex(wx, wy) {
   const r = 10 / S.cam.s;
   let best = null, bd = r * r;
@@ -849,7 +859,7 @@ function polyFinish() {
   }
   const kind = S.newKind, tx = new Tx();
   if (host) { tx.touch(host.p); host.pl.push(C.orientRing(ring, false)); inval(host.p); }
-  const np = addProvince(freshName(KIND_NAME[kind]), [[C.orientRing(ring, true)]], 0);
+  const np = addProvince(kind === 'land' ? nextLandName() : freshName(KIND_NAME[kind]), [[C.orientRing(ring, true)]], 0);
   np.terrain = KIND_TERRAIN[kind]; tx.born(np);
   if (kind === 'sea') np.color = seaColor(np.id); else if (kind === 'lake') np.color = '#cfe3f2';
   // sommets posés sur l'arête d'une voisine : on les y insère (pas de T-jonction)
@@ -907,7 +917,7 @@ function fillDown(wx, wy) {
   } catch (err) { toast('Échec du remplissage : ' + err.message); return; }
   if (C.polysArea([piece]) < 1e-9) { toast('Zone trop petite'); return; }
   const kind = S.fillKind, tx = new Tx();
-  const np = addProvince(freshName(kind === 'land' ? 'Province' : KIND_NAME[kind]), [piece.map((r, i) => C.orientRing(r, i === 0))], 0);
+  const np = addProvince(kind === 'land' ? nextLandName() : freshName(KIND_NAME[kind]),[piece.map((r, i) => C.orientRing(r, i === 0))], 0);
   np.terrain = KIND_TERRAIN[kind]; tx.born(np);
   if (kind === 'sea') np.color = seaColor(np.id); else if (kind === 'lake') np.color = '#cfe3f2';
   S.sel = np.id; tx.commit(); G.geomDirty = G.asgnDirty = true; need(); syncUI();
