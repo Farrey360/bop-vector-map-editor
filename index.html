@@ -85,6 +85,10 @@ input[type=color]{width:38px;height:32px;padding:2px;background:#0f1117;border:1
 .bgrow{border:1px solid var(--line);border-radius:8px;padding:6px 6px 0;margin-bottom:6px;cursor:pointer}
 .bgrow.sel{border-color:var(--accent)}
 .bgrow input[type=range],#bgPA{width:100%;accent-color:var(--accent)}
+#vbar{position:fixed;left:50%;bottom:calc(60px + var(--safe-b));transform:translateX(-50%);display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:6px 10px;z-index:40;max-width:96%;box-shadow:0 2px 12px #0008}
+#vbar[hidden]{display:none}
+#vbTxt{max-width:40vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vgo{margin-left:8px;padding:1px 8px;font-size:.85em}
 #dlg{position:fixed;inset:0;background:#000a;z-index:50;display:flex;align-items:center;justify-content:center;padding:16px}
 #dlg .box{background:var(--panel);border:1px solid var(--line);border-radius:14px;width:min(640px,100%);max-height:84vh;display:flex;flex-direction:column}
 #dlg .hd{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line)}
@@ -133,6 +137,7 @@ input[type=color]{width:38px;height:32px;padding:2px;background:#0f1117;border:1
 
 <div id="toast"></div>
 <div id="busy" hidden>Chargement…</div>
+<div id="vbar" hidden><button id="vbPrev">◀ Précédent</button><span id="vbTxt"></span><button id="vbNext">Suivant ▶</button><button id="vbList">Liste</button><button id="vbX">×</button></div>
 <div id="dlg" hidden><div class="box"><div class="hd"><b id="dlgTitle">Bilan et vérifications</b><button id="dlgX">×</button></div><div id="dlgBody"></div></div></div>
 <input id="file" type="file" hidden>
 <input id="imgfile" type="file" accept="image/*" hidden>
@@ -1023,22 +1028,48 @@ function bilan() {
   ];
 }
 
+function gotoItem(it) {
+  if (it.k === 'p') gotoProv(it.id);
+  else if (it.k === 'cn') { setView('country'); S.actC = it.id; syncUI(); }
+  else { setView('region'); S.actR = it.id; syncUI(); }
+}
+
+/* mode « vérification » : barre précédent/suivant qui enchaîne les éléments d'une catégorie du bilan.
+   La liste est recalculée à chaque pas : un élément corrigé disparaît tout seul. */
+const V = { cat: -1, pos: 0, curId: null, curK: null };
+function vItems() { const c = bilan()[V.cat]; return c ? c.items : []; }
+function vShow() {
+  const cat = bilan()[V.cat], items = cat ? cat.items : [];
+  if (!items.length) { vStop(); toast('Terminé : plus rien dans « ' + (cat ? cat.t : '') + ' »'); return; }
+  V.pos = Math.max(0, Math.min(V.pos, items.length - 1));
+  const it = items[V.pos];
+  V.curId = it.id; V.curK = it.k;
+  gotoItem(it);
+  $('#vbTxt').textContent = cat.t + ' — ' + (V.pos + 1) + ' / ' + items.length + ' : ' + it.t;
+  $('#vbar').hidden = false;
+}
+function vStart(cat, pos) { V.cat = cat; V.pos = pos || 0; $('#dlg').hidden = true; vShow(); }
+function vStop() { V.cat = -1; $('#vbar').hidden = true; }
+function vStep(dir) {
+  if (V.cat < 0) return;
+  const items = vItems();
+  const still = items[V.pos] && items[V.pos].id === V.curId && items[V.pos].k === V.curK;
+  // élément courant toujours présent : on avance d'un cran ; corrigé (disparu) : le suivant a pris sa place
+  V.pos += dir > 0 ? (still ? 1 : 0) : -1;
+  if (V.pos >= items.length) { vStop(); toast('Fin de la liste'); return; }
+  if (V.pos < 0) V.pos = 0;
+  vShow();
+}
+
 function showBilan() {
   $('#dlgTitle').textContent = 'Bilan et vérifications';
   const cats = bilan(), body = $('#dlgBody');
   const total = S.provs.size;
   body.innerHTML = `<div class="kv">${total} provinces · ${S.countries.size} pays · ${S.regions.size} régions</div>`
-    + cats.map((c, i) => `<details ${c.items.length && c.warn ? 'open' : ''}><summary><span class="${c.items.length ? (c.warn ? 'bad' : 'mid') : 'good'}">${c.items.length ? c.items.length : '✓'}</span> ${esc(c.t)}</summary>
+    + cats.map((c, i) => `<details ${c.items.length && c.warn ? 'open' : ''}><summary><span class="${c.items.length ? (c.warn ? 'bad' : 'mid') : 'good'}">${c.items.length ? c.items.length : '✓'}</span> ${esc(c.t)}${c.items.length ? ` <button class="vgo" data-go="${i}">Vérifier ▶</button>` : ''}</summary>
       <div class="chips">${c.items.slice(0, 80).map((it, j) => `<button data-c="${i}" data-j="${j}">${esc(it.t)}</button>`).join('')}${c.items.length > 80 ? `<span class="kv">… +${c.items.length - 80}</span>` : ''}</div></details>`).join('');
-  for (const b of body.querySelectorAll('button[data-c]')) {
-    b.onclick = () => {
-      const it = cats[+b.dataset.c].items[+b.dataset.j];
-      $('#dlg').hidden = true;
-      if (it.k === 'p') gotoProv(it.id);
-      else if (it.k === 'cn') { setView('country'); S.actC = it.id; syncUI(); }
-      else { setView('region'); S.actR = it.id; syncUI(); }
-    };
-  }
+  for (const b of body.querySelectorAll('button[data-c]')) b.onclick = () => vStart(+b.dataset.c, +b.dataset.j);
+  for (const b of body.querySelectorAll('button[data-go]')) b.onclick = e => { e.preventDefault(); e.stopPropagation(); vStart(+b.dataset.go, 0); };
   $('#dlg').hidden = false;
 }
 
@@ -1548,6 +1579,10 @@ $('#bUndo').onclick = undo; $('#bRedo').onclick = redo; $('#bFit').onclick = fit
 $('#bHome').onclick = async () => { if (S.dirty) await saveNow(); showHome(); };
 $('#pname').onchange = e => { S.name = e.target.value.trim() || 'Projet'; markDirty(); };
 $('#dlgX').onclick = () => { $('#dlg').hidden = true; };
+$('#vbPrev').onclick = () => vStep(-1);
+$('#vbNext').onclick = () => vStep(1);
+$('#vbList').onclick = () => showBilan();
+$('#vbX').onclick = () => vStop();
 $('#dlg').onclick = e => { if (e.target.id === 'dlg') $('#dlg').hidden = true; };
 $('#imgfile').onchange = e => { const f = e.target.files[0]; if (f) addBgFromFile(f); };
 
