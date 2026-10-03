@@ -1,7 +1,7 @@
 /* Service worker minimal : installable + hors-ligne quand servi en http(s).
    Réseau d'abord pour le code (les mises à jour arrivent toujours), repli cache. */
-const CACHE = 'bopvec-v2';
-const SHELL = ['./index.html', './core.js', './ne50.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
+const CACHE = 'bopvec-v4';
+const SHELL = ['./index.html', './core.js', './ne50.js', './polygon-clipping.min.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).catch(() => {}));

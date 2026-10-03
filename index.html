@@ -139,6 +139,7 @@ input[type=color]{width:38px;height:32px;padding:2px;background:#0f1117;border:1
 
 <script src="core.js"></script>
 <script src="ne50.js"></script>
+<script src="polygon-clipping.min.js"></script>
 <script>
 'use strict';
 const C = BopCore;
@@ -567,6 +568,11 @@ function draw() {
       ctx.fillRect(sx - 3, sy - 3, 6, 6); ctx.strokeRect(sx - 3, sy - 3, 6, 6); n++;
     }
   }
+  if (act && act.kind === 'vdrag' && act.snap) {
+    const [sx, sy] = w2s(act.snap[0], act.snap[1]);
+    ctx.strokeStyle = '#ff3b3b'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(sx, sy, 9, 0, 6.2832); ctx.stroke();
+  }
 
   // instantané de la vue complète (réutilisé pendant les déplacements/zooms)
   if (!snap) snap = document.createElement('canvas');
@@ -872,6 +878,53 @@ function generateOcean() {
   toast(pieces.length + ' zone' + (pieces.length > 1 ? 's' : '') + ' maritime' + (pieces.length > 1 ? 's' : '') + ' générée' + (pieces.length > 1 ? 's' : '') + ' — découpe-les ensuite avec l’outil Découpe');
 }
 
+/* Ajoute les terres Natural Earth absentes du projet (ex. projet converti d'une carte raster partielle).
+   Terres NE − provinces existantes ; les éclats plus petits que MIN_AREA (°²) sont ignorés. */
+async function completeWithNE() {
+  if (!window.polygonClipping) { toast('Bibliothèque de découpe absente (polygon-clipping.min.js)'); return; }
+  const MIN_AREA = 0.02;
+  busy(true, 'Ajout des terres Natural Earth…');
+  await new Promise(r => setTimeout(r, 30));
+  try {
+    const pc = window.polygonClipping;
+    const toG = poly => poly.map(r => { const a = []; for (let i = 0; i < r.length; i += 2) a.push([r[i], r[i + 1]]); a.push([r[0], r[1]]); return a; });
+    const bbG = g => {
+      const b = [Infinity, Infinity, -Infinity, -Infinity];
+      for (const pl of g) for (const q of pl[0]) { b[0] = Math.min(b[0], q[0]); b[2] = Math.max(b[2], q[0]); b[1] = Math.min(b[1], q[1]); b[3] = Math.max(b[3], q[1]); }
+      return b;
+    };
+    const exist = [];
+    for (const p of S.provs.values()) { const g = p.polys.map(toG); exist.push({ g, bb: bbOf(p) }); }
+    const byTag = new Map();
+    for (const c of S.countries.values()) if (c.tag) byTag.set(c.tag, c.id);
+    const tx = new Tx();
+    let pieces = 0, dropped = 0, nCountries = 0;
+    for (const c of window.NE_COUNTRIES) {
+      const g = c.p.map(toG), bb = bbG(g);
+      const clips = [];
+      for (const e of exist) if (!disjoint(e.bb, bb)) for (const pl of e.g) clips.push(pl);
+      let res;
+      try { res = clips.length ? pc.difference(g, ...clips) : g; } catch (err) { continue; }
+      const keep = [];
+      for (const pl of res) {
+        const rings = pl.map(r => cleanRing(r.flat())).filter(Boolean);
+        if (!rings.length || !cleanRing(pl[0].flat())) continue;
+        if (C.polysArea([rings]) < MIN_AREA) { dropped++; continue; }
+        keep.push(rings.map((r, i) => C.orientRing(r, i === 0)));
+      }
+      if (!keep.length) continue;
+      let cid = c.t && byTag.get(c.t);
+      if (!cid) { cid = addCountry(c.n, c.t); if (c.t) byTag.set(c.t, cid); }
+      nCountries++;
+      for (const poly of keep) { const np = addProvince(freshName(c.n), [poly], cid); tx.born(np); pieces++; }
+    }
+    tx.commit(); G.geomDirty = G.asgnDirty = true; need();
+    toast(pieces ? pieces + ' provinces ajoutées (' + nCountries + ' pays) ; ' + dropped + ' éclats < ' + MIN_AREA + '° ignorés' : 'Rien à ajouter : tout est déjà couvert');
+  } catch (err) {
+    toast('Échec : ' + err.message);
+  } finally { busy(false); }
+}
+
 /* ===================================================================== fonds de référence */
 function bgHit(px, py, wx, wy) {
   const l = S.bg[S.bgSel];
@@ -1064,6 +1117,41 @@ function vertexDown(e, px, py, wx, wy, right) {
   S.sel = p ? p.id : 0; syncUI(); need();
 }
 
+// sommet le plus proche du curseur, en ignorant les sommets en cours de déplacement
+function snapExcluding(wx, wy, refs) {
+  const r = 10 / S.cam.s;
+  const skip = new Map();
+  for (const f of refs) { if (!skip.has(f.r)) skip.set(f.r, new Set()); skip.get(f.r).add(f.i); }
+  let best = null, bd = r * r;
+  for (const p of S.provs.values()) {
+    const bb = bbOf(p);
+    if (wx < bb[0] - r || wx > bb[2] + r || wy < bb[1] - r || wy > bb[3] + r) continue;
+    for (const pl of p.polys) for (const ring of pl) {
+      const sk = skip.get(ring);
+      for (let i = 0; i < ring.length; i += 2) {
+        if (sk && sk.has(i)) continue;
+        const dx = ring[i] - wx, dy = ring[i + 1] - wy, d = dx * dx + dy * dy;
+        if (d < bd) { bd = d; best = [ring[i], ring[i + 1]]; }
+      }
+    }
+  }
+  return best;
+}
+
+// retire les doublons consécutifs (sommets fusionnés voisins dans un même contour)
+function dedupeRings(ids) {
+  for (const id of ids) {
+    const p = S.provs.get(id); if (!p) continue;
+    for (const poly of p.polys) for (const r of poly) {
+      for (let i = r.length - 2; i >= 0 && r.length > 6; i -= 2) {
+        const j = i === 0 ? r.length - 2 : i - 2;
+        if (j !== i && Math.abs(r[i] - r[j]) < 1e-9 && Math.abs(r[i + 1] - r[j + 1]) < 1e-9) r.splice(i, 2);
+      }
+    }
+    inval(p);
+  }
+}
+
 function insertVertexShared(eb) {
   const tx = new Tx(), refs = [];
   const same = (x, y, u, v) => Math.abs(x - u) < 1e-9 && Math.abs(y - v) < 1e-9;
@@ -1206,11 +1294,16 @@ cv.addEventListener('pointermove', e => {
       S.cam.x -= (px - act.lx) / S.cam.s; S.cam.y += (py - act.ly) / S.cam.s; act.lx = px; act.ly = py; need(true); break;
     case 'cut': cutMove(px, py, wx, wy); break;
     case 'paint': paintMove(wx, wy); break;
-    case 'vdrag':
-      for (const f of act.refs) { f.r[f.i] = wx; f.r[f.i + 1] = wy; }
+    case 'vdrag': {
+      // accroche à un autre sommet (hors ceux qu'on déplace) : lâcher dessus = fusion
+      const sn = snapExcluding(wx, wy, act.refs);
+      act.snap = sn;
+      const tx_ = sn ? sn[0] : wx, ty_ = sn ? sn[1] : wy;
+      for (const f of act.refs) { f.r[f.i] = tx_; f.r[f.i + 1] = ty_; }
       act.moved = true;
       for (const id of act.provIds) { const p = S.provs.get(id); if (p) { p._path = null; p._bb = null; } }
       need(); break;
+    }
   }
 });
 
@@ -1228,6 +1321,7 @@ function endPointer(e) {
   else if (a.kind === 'paint') { if (a.changed) a.tx.commit(); }
   else if (a.kind === 'vdrag') {
     G.dragB = null; G.geomDirty = G.asgnDirty = true;
+    if (a.snap) { dedupeRings(a.provIds); toast('Sommets fusionnés'); }
     if (a.moved) a.tx.commit();
     for (const id of a.provIds) { const p = S.provs.get(id); if (p) { p._path = null; p._bb = null; } }
     need();
@@ -1304,7 +1398,7 @@ const HINTS = {
   'prov:merge': 'Sélectionne une province, puis clique les voisines : elles sont absorbées par la première (la frontière commune disparaît).',
   'prov:poly': 'Clique des points (ils s’accrochent aux sommets existants) ; ferme en recliquant le 1er point, double-clic ou Entrée. Dans une terre = trou (lac), dans le vide = nouvelle zone. Type : voir le panneau.',
   'bg:bgmove': 'Choisis un fond dans le panneau, glisse-le pour le déplacer ; poignées dans les coins = redimensionner (ratio conservé).',
-  'prov:vertex': 'Glisse un sommet (les voisines suivent). Clique une arête de la province sélectionnée pour ajouter un sommet. Clic droit sur un sommet = supprime.',
+  'prov:vertex': 'Glisse un sommet (les voisines suivent) ; lâche-le sur un autre sommet (cercle rouge) pour les fusionner. Clique une arête de la province sélectionnée pour ajouter un sommet. Clic droit sur un sommet = supprime.',
   'country:assign': 'Glisse sur les provinces pour les donner au pays actif. Clic droit = retirer.',
   'region:assign': 'Glisse sur les provinces pour les donner à la région active. Clic droit = retirer.',
   'terrain:paint': 'Glisse sur les provinces pour leur appliquer le terrain choisi. Clic droit = non défini. [ ] change de terrain.',
@@ -1436,6 +1530,7 @@ function renderMenu() {
     <button id="mExport">Export complet (.zip : provinces, régions, pays)</button>
     <button id="mBilan">Bilan et vérifications</button>
     <button id="mOcean">Générer les mers / océans</button>
+    <button id="mNEAdd">Compléter avec Natural Earth (terres manquantes)</button>
     <button id="mCloud">☁ Cloud GitHub (sauvegarde partout)</button>
     <label><input type="checkbox" id="mLab" ${S.labels ? 'checked' : ''}> Noms sur la carte (L)</label>
     <div class="kv" style="margin:0 6px">Raccourcis : 1-4 vues · V C M D H outils · Espace = déplacer · F tout voir · Ctrl+Z / Y</div>`;
@@ -1444,6 +1539,7 @@ function renderMenu() {
   $('#mExport').onclick = () => { exportAll(); $('#menu').hidden = true; };
   $('#mBilan').onclick = () => { $('#menu').hidden = true; showBilan(); };
   $('#mOcean').onclick = () => { $('#menu').hidden = true; generateOcean(); };
+  $('#mNEAdd').onclick = () => { $('#menu').hidden = true; completeWithNE(); };
   $('#mCloud').onclick = () => { $('#menu').hidden = true; showCloud(); };
   $('#mLab').onchange = e => { S.labels = e.target.checked; need(); };
 }
