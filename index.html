@@ -584,8 +584,21 @@ function draw() {
   if (snap.width !== cv.width || snap.height !== cv.height) { snap.width = cv.width; snap.height = cv.height; }
   snap.getContext('2d').drawImage(cv, 0, 0);
   snapCam = { x: S.cam.x, y: S.cam.y, s: S.cam.s };
+  if (act && act.kind === 'brushdel' && act.ids.size) {
+    ctx.fillStyle = '#ff2d2daa'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+    for (const id of act.ids) {
+      const p = S.provs.get(id); if (!p) continue;
+      ctx.beginPath();
+      for (const poly of p.polys) for (const ring of poly) {
+        for (let i = 0; i < ring.length; i += 2) { const [sx, sy] = w2s(ring[i], ring[i + 1]); i ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); }
+        ctx.closePath();
+      }
+      ctx.fill('evenodd'); ctx.stroke();
+    }
+  }
   if (S.view === 'prov' && S.tool === 'weld' && brush.x !== null) {
-    ctx.strokeStyle = '#ff3b3b'; ctx.lineWidth = 2; ctx.fillStyle = '#ff3b3b22';
+    const del = brush.mode === 'del';
+    ctx.strokeStyle = del ? '#ff9f1a' : '#ff3b3b'; ctx.lineWidth = 2; ctx.fillStyle = del ? '#ff9f1a22' : '#ff3b3b22';
     ctx.beginPath(); ctx.arc(brush.x, brush.y, brush.r, 0, 6.2832); ctx.fill(); ctx.stroke();
   }
 }
@@ -1299,7 +1312,7 @@ function deleteVertices(refs) {
 
 /* pinceau de fusion : tous les sommets sous le cercle sont fondus en un seul (barycentre).
    Un contour qui s'effondrerait (moins de 3 sommets restants) est épargné. */
-const brush = { r: 18, x: null, y: null };   // rayon en pixels écran
+const brush = { r: 18, x: null, y: null, mode: 'weld' };   // rayon en pixels écran ; mode : 'weld' | 'del'
 function weldAt(wx, wy, tx) {
   const r = brush.r / S.cam.s, r2 = r * r;
   const key = (x, y) => Math.round(x * 1e8) + ',' + Math.round(y * 1e8);
@@ -1334,8 +1347,46 @@ function weldAt(wx, wy, tx) {
   return pos.size;
 }
 function weldDown(wx, wy) {
+  if (brush.mode === 'del') { act = { kind: 'brushdel', ids: new Set() }; delCollect(wx, wy); return; }
   act = { kind: 'weld', tx: new Tx(), n: 0, lx: wx, ly: wy };
   act.n += weldAt(wx, wy, act.tx);
+}
+
+/* mode « Supprimer » : en restant cliqué, toutes les provinces touchées par le cercle sont sélectionnées ;
+   elles sont supprimées d'un coup au relâchement (une seule annulation). */
+function brushTouches(p, wx, wy, r) {
+  const bb = bbOf(p);
+  if (wx < bb[0] - r || wx > bb[2] + r || wy < bb[1] - r || wy > bb[3] + r) return false;
+  const r2 = r * r;
+  for (const poly of p.polys) {
+    for (const ring of poly) {
+      const n = ring.length;
+      for (let i = 0, j = n - 2; i < n; j = i, i += 2) {
+        const ax = ring[j], ay = ring[j + 1], bx = ring[i], by = ring[i + 1];
+        const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+        let t = l2 ? ((wx - ax) * dx + (wy - ay) * dy) / l2 : 0; t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const ex = ax + t * dx - wx, ey = ay + t * dy - wy;
+        if (ex * ex + ey * ey <= r2) return true;
+      }
+    }
+    const pb = C.polyBBox(poly);
+    if (wx >= pb[0] && wx <= pb[2] && wy >= pb[1] && wy <= pb[3] && C.pointInPoly(wx, wy, poly)) return true;
+  }
+  return false;
+}
+function delCollect(wx, wy) {
+  const r = brush.r / S.cam.s, before = act.ids.size;
+  for (const p of S.provs.values()) if (!act.ids.has(p.id) && brushTouches(p, wx, wy, r)) act.ids.add(p.id);
+  if (act.ids.size !== before) need();
+}
+function delFinish(a) {
+  if (!a.ids.size) { need(); return; }
+  const tx = new Tx();
+  for (const id of a.ids) { const p = S.provs.get(id); if (p) { tx.touch(p); S.provs.delete(id); } }
+  if (!S.provs.has(S.sel)) S.sel = 0;
+  G.geomDirty = G.asgnDirty = true;
+  tx.commit(); need();
+  toast(a.ids.size + ' province(s) supprimée(s) — Ctrl+Z pour annuler');
 }
 function weldMove(wx, wy) {
   if (Math.hypot(wx - act.lx, wy - act.ly) * S.cam.s < brush.r * 0.4) return;
@@ -1447,6 +1498,7 @@ cv.addEventListener('pointermove', e => {
     case 'cut': cutMove(px, py, wx, wy); break;
     case 'paint': paintMove(wx, wy); break;
     case 'weld': weldMove(wx, wy); need(); break;
+    case 'brushdel': delCollect(wx, wy); break;
     case 'vdrag': {
       // accroche à un autre sommet (hors ceux qu'on déplace) : lâcher dessus = fusion
       const sn = snapExcluding(wx, wy, act.refs);
@@ -1472,6 +1524,7 @@ function endPointer(e) {
   else if (a.kind === 'bgmove' || a.kind === 'bgresize') markDirty();
   else if (a.kind === 'cut') { act = a; cutUp(px, py, wx, wy); act = null; }
   else if (a.kind === 'paint') { if (a.changed) a.tx.commit(); }
+  else if (a.kind === 'brushdel') delFinish(a);
   else if (a.kind === 'weld') { if (a.tx.commit()) toast(a.n + ' sommets fusionnés'); else toast('Rien à fusionner sous le pinceau'); G.geomDirty = G.asgnDirty = true; need(); }
   else if (a.kind === 'vdrag') {
     G.dragB = null; G.geomDirty = G.asgnDirty = true;
@@ -1554,7 +1607,7 @@ const HINTS = {
   'prov:merge': 'Sélectionne une province, puis clique les voisines : elles sont absorbées par la première (la frontière commune disparaît).',
   'prov:fill': 'Clique dans une zone vide entre des provinces : une province prend exactement la forme du vide (type : voir le panneau). Reclique sur Remplir (ou V) pour quitter.',
   'prov:poly': 'Clique des points (ils s’accrochent aux sommets existants) ; ferme en recliquant le 1er point, double-clic ou Entrée. Dans une terre = trou (lac), dans le vide = nouvelle zone. Type : voir le panneau.',
-  'prov:weld': 'Pinceau de fusion : clique ou glisse, tous les sommets sous le cercle fusionnent en un seul (voisines incluses). [ ] ou le curseur du panneau = taille. Annuler = Ctrl+Z.',
+  'prov:weld': 'Pinceau (action au choix dans le panneau) — Fusionner : clique ou glisse, tous les sommets sous le cercle fusionnent en un seul (voisines incluses). Supprimer : reste cliqué et passe sur les provinces pour les sélectionner (rouge), relâche = suppression. [ ] ou le curseur du panneau = taille. Annuler = Ctrl+Z.',
   'bg:bgmove': 'Choisis un fond dans le panneau, glisse-le pour le déplacer ; poignées dans les coins = redimensionner (ratio conservé).',
   'prov:vertex': 'Glisse un sommet (les voisines suivent) ; lâche-le sur un autre sommet (cercle rouge) pour les fusionner. Clique une arête de la province sélectionnée pour ajouter un sommet. Clic droit sur un sommet = supprime.',
   'country:assign': 'Glisse sur les provinces pour les donner au pays actif. Clic droit = retirer.',
@@ -1595,9 +1648,10 @@ function renderPanel() {
     const p = S.provs.get(S.sel);
     const kindHtml = S.tool === 'poly' || S.tool === 'fill'
       ? `<h3>${S.tool === 'fill' ? 'Remplir une zone vide' : 'Polygone libre'}</h3><div class="row"><label>Type</label><select id="pKind">${['sea', 'land', 'lake'].map(k => `<option value="${k}" ${(S.tool === 'fill' ? S.fillKind : S.newKind) === k ? 'selected' : ''}>${{ sea: 'Mer', land: 'Province (terre)', lake: 'Lac' }[k]}</option>`).join('')}</select></div>`
-      : S.tool === 'weld' ? `<h3>Pinceau de fusion</h3><div class="row"><label>Rayon</label><input type="range" id="wRad" min="4" max="120" value="${brush.r}"><span class="kv" id="wRadV">${brush.r}px</span></div>` : '';
+      : S.tool === 'weld' ? `<h3>Pinceau</h3><div class="row"><label>Action</label><select id="wMode"><option value="weld" ${brush.mode === 'weld' ? 'selected' : ''}>Fusionner les sommets</option><option value="del" ${brush.mode === 'del' ? 'selected' : ''}>Supprimer des provinces</option></select></div><div class="row"><label>Rayon</label><input type="range" id="wRad" min="4" max="120" value="${brush.r}"><span class="kv" id="wRadV">${brush.r}px</span></div>` : '';
     const bindKind = () => {
       const k = $('#pKind'); if (k) k.onchange = e => { if (S.tool === 'fill') S.fillKind = e.target.value; else S.newKind = e.target.value; };
+      const wm = $('#wMode'); if (wm) wm.onchange = e => { brush.mode = e.target.value; need(); };
       const w = $('#wRad'); if (w) w.oninput = e => { brush.r = +e.target.value; $('#wRadV').textContent = brush.r + 'px'; need(); };
     };
     if (!p) { el.innerHTML = kindHtml + `<h3>Province</h3><div class="kv">${S.provs.size} provinces · ${S.countries.size} pays</div><div class="kv">Aucune sélection.</div>`; bindKind(); return; }
