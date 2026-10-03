@@ -137,7 +137,7 @@ input[type=color]{width:38px;height:32px;padding:2px;background:#0f1117;border:1
 
 <div id="toast"></div>
 <div id="busy" hidden>Chargement…</div>
-<div id="vbar" hidden><button id="vbPrev">◀ Précédent</button><span id="vbTxt"></span><button id="vbNext">Suivant ▶</button><button id="vbList">Liste</button><button id="vbX">×</button></div>
+<div id="vbar" hidden><button id="vbPrev">◀ Précédent</button><span id="vbTxt"></span><button id="vbOk" title="Normal que cette province soit en plusieurs parties : la retirer de la liste (elle reviendra si ses contours sont modifiés)">✓ Valider</button><button id="vbNext">Suivant ▶</button><button id="vbList">Liste</button><button id="vbX">×</button></div>
 <div id="dlg" hidden><div class="box"><div class="hd"><b id="dlgTitle">Bilan et vérifications</b><button id="dlgX">×</button></div><div id="dlgBody"></div></div></div>
 <input id="file" type="file" hidden>
 <input id="imgfile" type="file" accept="image/*" hidden>
@@ -332,7 +332,7 @@ function serialize() {
     bg: S.bg.map(l => ({ name: l.name, src: l.src, x0: l.x0, y0: l.y0, x1: l.x1, y1: l.y1, opacity: l.opacity, visible: l.visible })),
     countries: [...S.countries.values()], regions: [...S.regions.values()],
     provinces: [...S.provs.values()].map(p => ({
-      id: p.id, name: p.name, color: p.color, country: p.country, region: p.region, terrain: p.terrain,
+      id: p.id, name: p.name, color: p.color, country: p.country, region: p.region, terrain: p.terrain, ...(p.okMulti ? { okMulti: p.okMulti } : {}),
       polys: p.polys.map(pl => pl.map(r => r.map(v => Math.round(v * 1e7) / 1e7))), // 1e-7° ≈ 1 cm : allège le fichier
     })),
   };
@@ -870,6 +870,50 @@ function polyFinish() {
   toast(host ? KIND_NAME[kind] + ' créé (trou découpé dans « ' + host.p.name + ' »)' : KIND_NAME[kind] + ' créé');
 }
 
+/* Outil « Remplir » : un clic dans une zone vide (entre des provinces) crée une province qui épouse exactement le vide.
+   Fenêtre locale (rect − provinces voisines), agrandie tant que la zone touche le bord de la fenêtre. */
+function fillDown(wx, wy) {
+  if (!window.polygonClipping) { toast('Bibliothèque de découpe absente (polygon-clipping.min.js)'); return; }
+  if (hitProv(wx, wy)) { toast('Clique dans une zone vide (entre les provinces)'); return; }
+  const pc = window.polygonClipping;
+  const toG = poly => poly.map(r => { const a = []; for (let i = 0; i < r.length; i += 2) a.push([r[i], r[i + 1]]); a.push([r[0], r[1]]); return a; });
+  const ringOf = r => {   // anneau fermé [[x,y]..] -> plat, sans arrondi (garde les sommets communs exacts)
+    const a = [];
+    for (const [x, y] of r) { const n = a.length; if (n >= 2 && a[n - 2] === x && a[n - 1] === y) continue; a.push(x, y); }
+    if (a.length >= 4 && a[0] === a[a.length - 2] && a[1] === a[a.length - 1]) a.length -= 2;
+    return a.length >= 6 ? a : null;
+  };
+  let h = 0.25, piece = null;
+  try {
+    for (;;) {
+      const rect = [Math.max(-180, wx - h), Math.max(-90, wy - h), Math.min(180, wx + h), Math.min(90, wy + h)];
+      const clips = [];
+      for (const p of S.provs.values()) { if (disjoint(bbOf(p), rect)) continue; for (const pl of p.polys) clips.push(toG(pl)); }
+      const R = [[[rect[0], rect[1]], [rect[2], rect[1]], [rect[2], rect[3]], [rect[0], rect[3]], [rect[0], rect[1]]]];
+      const res = clips.length ? pc.difference(R, ...clips) : [R];
+      let pick = null;
+      for (const pl of res) {
+        const rings = pl.map(r => ringOf(r)).filter(Boolean);
+        if (rings.length && ringOf(pl[0]) && C.pointInPoly(wx, wy, rings)) { pick = rings; break; }
+      }
+      if (!pick) { toast('Aucune zone vide à cet endroit'); return; }
+      const bb = C.ringBBox(pick[0]), e = 1e-9;
+      const worldAll = rect[0] <= -180 && rect[2] >= 180 && rect[1] <= -90 && rect[3] >= 90;
+      const touches = (bb[0] <= rect[0] + e && rect[0] > -180) || (bb[2] >= rect[2] - e && rect[2] < 180)
+        || (bb[1] <= rect[1] + e && rect[1] > -90) || (bb[3] >= rect[3] - e && rect[3] < 90);
+      if (!touches || worldAll) { piece = pick; break; }
+      h *= 2;
+    }
+  } catch (err) { toast('Échec du remplissage : ' + err.message); return; }
+  if (C.polysArea([piece]) < 1e-9) { toast('Zone trop petite'); return; }
+  const kind = S.newKind, tx = new Tx();
+  const np = addProvince(freshName(KIND_NAME[kind]), [piece.map((r, i) => C.orientRing(r, i === 0))], 0);
+  np.terrain = KIND_TERRAIN[kind]; tx.born(np);
+  if (kind === 'sea') np.color = seaColor(np.id); else if (kind === 'lake') np.color = '#cfe3f2';
+  S.sel = np.id; tx.commit(); G.geomDirty = G.asgnDirty = true; need(); syncUI();
+  toast(KIND_NAME[kind] + ' créé(e) : ' + piece[0].length / 2 + ' sommets' + (piece.length > 1 ? ', ' + (piece.length - 1) + ' trou(s)' : ''));
+}
+
 function generateOcean() {
   const all = [];
   for (const p of S.provs.values()) for (const pl of p.polys) all.push(pl);
@@ -1011,6 +1055,19 @@ function pickResult(r) {
 
 function terrType(p) { return p.terrain === NOT_SET ? 'land' : TERRAINS[p.terrain][2]; }
 
+/* signature de la géométrie : une province validée « en plusieurs parties » réapparaît si ses contours changent */
+function multiSig(p) {
+  let h = 2166136261 >>> 0;
+  for (const poly of p.polys) for (const r of poly) { h = Math.imul(h ^ r.length, 16777619) >>> 0; for (const v of r) h = Math.imul(h ^ (Math.round(v * 1e6) | 0), 16777619) >>> 0; }
+  return p.polys.length + ':' + h.toString(36);
+}
+function vValidate() {
+  const p = V.curK === 'p' ? S.provs.get(V.curId) : null;
+  if (!p || !bilan()[V.cat].valid) return;
+  const tx = new Tx(); tx.touch(p); p.okMulti = multiSig(p); tx.commit(); need();
+  vStep(1);
+}
+
 function bilan() {
   const lands = [...S.provs.values()].filter(p => terrType(p) === 'land');
   const all = [...S.provs.values()];
@@ -1026,7 +1083,7 @@ function bilan() {
     { t: 'Mers/infranchissables rattachées à un pays', warn: true, items: all.filter(p => terrType(p) !== 'land' && p.country).map(item) },
     { t: 'Noms en double', warn: true, items: all.filter(p => names.get(p.name) > 1).map(item) },
     { t: 'Très petites provinces (< 0,002 °²)', warn: false, items: all.filter(p => C.polysArea(p.polys) < 0.002).map(item) },
-    { t: 'Provinces en plusieurs parties', warn: false, items: all.filter(p => p.polys.length > 1).map(item) },
+    { t: 'Provinces en plusieurs parties', warn: false, valid: true, items: all.filter(p => p.polys.length > 1 && p.okMulti !== multiSig(p)).map(item) },
     { t: 'Pays vides', warn: false, items: [...S.countries.values()].filter(c => !usedC.has(c.id)).map(c => ({ k: 'cn', id: c.id, t: c.name })) },
     { t: 'Régions vides', warn: false, items: [...S.regions.values()].filter(r => !usedR.has(r.id)).map(r => ({ k: 'rg', id: r.id, t: r.name })) },
   ];
@@ -1050,6 +1107,7 @@ function vShow() {
   V.curId = it.id; V.curK = it.k;
   gotoItem(it);
   $('#vbTxt').textContent = cat.t + ' — ' + (V.pos + 1) + ' / ' + items.length + ' : ' + it.t;
+  $('#vbOk').hidden = !cat.valid;
   $('#vbar').hidden = false;
 }
 function vStart(cat, pos) { V.cat = cat; V.pos = pos || 0; $('#dlg').hidden = true; vShow(); }
@@ -1323,6 +1381,7 @@ function toolDown(e, px, py) {
     else if (S.tool === 'poly') polyDown(px, py, wx, wy, right);
     else if (S.tool === 'cut') cutDown(e, px, py, wx, wy, right);
     else if (S.tool === 'merge') mergeClick(wx, wy);
+    else if (S.tool === 'fill' && !right) fillDown(wx, wy);
     else if (S.tool === 'vertex') vertexDown(e, px, py, wx, wy, right);
     else if (S.tool === 'weld' && !right) weldDown(wx, wy);
   } else if (S.tool === 'pipette') pipetteAt(wx, wy);
@@ -1459,7 +1518,7 @@ window.addEventListener('keydown', e => {
   if (k === 'delete' || k === 'backspace') { if (S.view === 'prov') deleteSel(); return; }
   if (['1', '2', '3', '4', '5'].includes(k)) { setView(['prov', 'country', 'region', 'terrain', 'bg'][+k - 1]); return; }
   const map = S.view === 'prov'
-    ? { v: 'select', c: 'cut', m: 'merge', d: 'vertex', w: 'weld', p: 'poly', h: 'hand' }
+    ? { v: 'select', c: 'cut', m: 'merge', d: 'vertex', w: 'weld', p: 'poly', f: 'fill', h: 'hand' }
     : S.view === 'bg' ? { b: 'bgmove', h: 'hand' }
     : S.view === 'terrain' ? { t: 'paint', i: 'pipette', h: 'hand', a: 'paint' }
     : { a: 'assign', i: 'pipette', h: 'hand' };
@@ -1483,6 +1542,7 @@ const HINTS = {
   'prov:select': 'Clique une province pour la sélectionner et l’éditer.',
   'prov:cut': 'Trace au stylet/souris à travers les terres, ou clique des points puis double-clic / Entrée. Dépasse de chaque côté. Clic droit = retire le dernier point, Échap annule.',
   'prov:merge': 'Sélectionne une province, puis clique les voisines : elles sont absorbées par la première (la frontière commune disparaît).',
+  'prov:fill': 'Clique dans une zone vide entre des provinces : une province prend exactement la forme du vide (type : voir le panneau). Reclique sur Remplir (ou V) pour quitter.',
   'prov:poly': 'Clique des points (ils s’accrochent aux sommets existants) ; ferme en recliquant le 1er point, double-clic ou Entrée. Dans une terre = trou (lac), dans le vide = nouvelle zone. Type : voir le panneau.',
   'prov:weld': 'Pinceau de fusion : clique ou glisse, tous les sommets sous le cercle fusionnent en un seul (voisines incluses). [ ] ou le curseur du panneau = taille. Annuler = Ctrl+Z.',
   'bg:bgmove': 'Choisis un fond dans le panneau, glisse-le pour le déplacer ; poignées dans les coins = redimensionner (ratio conservé).',
@@ -1497,7 +1557,7 @@ function setView(v) {
   S.tool = TOOLS[v][0][0];
   syncUI(); need();
 }
-function setTool(t) { if (!TOOLS[S.view].some(x => x[0] === t)) return; S.tool = t; cutReset(); syncUI(); need(); cv.style.cursor = cursorFor(); }
+function setTool(t) { if (!(S.view === 'prov' && t === 'fill') && !TOOLS[S.view].some(x => x[0] === t)) return; S.tool = t; cutReset(); syncUI(); need(); cv.style.cursor = cursorFor(); }
 
 function syncUI() {
   // vues
@@ -1505,9 +1565,9 @@ function syncUI() {
   for (const b of $('#views').children) b.onclick = () => setView(b.dataset.v);
   // outils
   $('#tools').innerHTML = TOOLS[S.view].map(([k, ic, n, key]) => `<button data-t="${k}" class="${S.tool === k ? 'on' : ''}" title="${n} (${key})"><i>${ic}</i><small>${n}</small></button>`).join('')
-    + (S.view === 'prov' ? '<hr><button id="bExplode" title="Éclater en parties"><i>✺</i><small>Éclater</small></button><button id="bDel" title="Supprimer (Suppr)"><i>🗑</i><small>Suppr.</small></button><button id="bOcean" title="Générer les mers/océans (complément des terres)"><i>🌊</i><small>Océans</small></button>' : '');
+    + (S.view === 'prov' ? '<hr><button id="bExplode" title="Éclater en parties"><i>✺</i><small>Éclater</small></button><button id="bDel" title="Supprimer (Suppr)"><i>🗑</i><small>Suppr.</small></button><button id="bOcean" title="Générer les mers/océans (complément des terres)"><i>🌊</i><small>Océans</small></button><button id="bFill" class="' + (S.tool === 'fill' ? 'on' : '') + '" title="Remplir une zone vide d’un clic (F)"><i>🪣</i><small>Remplir</small></button>' : '');
   for (const b of $('#tools').querySelectorAll('[data-t]')) b.onclick = () => setTool(b.dataset.t);
-  if ($('#bExplode')) { $('#bExplode').onclick = explodeSel; $('#bDel').onclick = deleteSel; $('#bOcean').onclick = generateOcean; }
+  if ($('#bExplode')) { $('#bExplode').onclick = explodeSel; $('#bDel').onclick = deleteSel; $('#bOcean').onclick = generateOcean; $('#bFill').onclick = () => setTool(S.tool === 'fill' ? 'select' : 'fill'); }
   $('#bUndo').disabled = !S.undo.length; $('#bRedo').disabled = !S.redo.length;
   $('#hint').textContent = HINTS[S.view + ':' + S.tool] || '';
   $('#hint').hidden = !$('#hint').textContent;
@@ -1523,8 +1583,8 @@ function renderPanel() {
   const el = $('#panel');
   if (S.view === 'prov') {
     const p = S.provs.get(S.sel);
-    const kindHtml = S.tool === 'poly'
-      ? `<h3>Polygone libre</h3><div class="row"><label>Type</label><select id="pKind">${['sea', 'land', 'lake'].map(k => `<option value="${k}" ${S.newKind === k ? 'selected' : ''}>${{ sea: 'Mer', land: 'Terre', lake: 'Lac' }[k]}</option>`).join('')}</select></div>`
+    const kindHtml = S.tool === 'poly' || S.tool === 'fill'
+      ? `<h3>${S.tool === 'fill' ? 'Remplir une zone vide' : 'Polygone libre'}</h3><div class="row"><label>Type</label><select id="pKind">${['sea', 'land', 'lake'].map(k => `<option value="${k}" ${S.newKind === k ? 'selected' : ''}>${{ sea: 'Mer', land: 'Terre', lake: 'Lac' }[k]}</option>`).join('')}</select></div>`
       : S.tool === 'weld' ? `<h3>Pinceau de fusion</h3><div class="row"><label>Rayon</label><input type="range" id="wRad" min="4" max="120" value="${brush.r}"><span class="kv" id="wRadV">${brush.r}px</span></div>` : '';
     const bindKind = () => {
       const k = $('#pKind'); if (k) k.onchange = e => { S.newKind = e.target.value; };
@@ -1642,6 +1702,7 @@ $('#pname').onchange = e => { S.name = e.target.value.trim() || 'Projet'; markDi
 $('#dlgX').onclick = () => { $('#dlg').hidden = true; };
 $('#vbPrev').onclick = () => vStep(-1);
 $('#vbNext').onclick = () => vStep(1);
+$('#vbOk').onclick = vValidate;
 $('#vbList').onclick = () => showBilan();
 $('#vbX').onclick = () => vStop();
 $('#dlg').onclick = e => { if (e.target.id === 'dlg') $('#dlg').hidden = true; };
