@@ -762,6 +762,48 @@ function explodeSel() {
   }
   tx.commit(); toast(extra.length + ' provinces créées');
 }
+/* Outil « Détacher » : un clic sur une partie d'une province multi-parties la sépare en nouvelle province (les autres parties restent ensemble). */
+function hitPart(wx, wy) {   // { p, idx } : province et index de la partie (polygone) sous le point
+  for (const p of S.provs.values()) {
+    const bb = bbOf(p);
+    if (wx < bb[0] || wx > bb[2] || wy < bb[1] || wy > bb[3]) continue;
+    for (let i = 0; i < p.polys.length; i++) {
+      const pb = C.polyBBox(p.polys[i]);
+      if (wx < pb[0] || wx > pb[2] || wy < pb[1] || wy > pb[3]) continue;
+      if (C.pointInPoly(wx, wy, p.polys[i])) return { p, idx: i };
+    }
+  }
+  return null;
+}
+/* Outil « Fusion morceau » : sélectionne une province, puis clique la partie voisine à absorber (seulement ce morceau, pas toute la province cliquée). */
+function mergePartClick(wx, wy) {
+  const h = hitPart(wx, wy);
+  if (!h) return;
+  const A = S.provs.get(S.sel);
+  if (!A) { S.sel = h.p.id; syncUI(); need(); return; }
+  if (A.id === h.p.id) return;
+  const tx = new Tx(); tx.touch(A); tx.touch(h.p);
+  const [poly] = h.p.polys.splice(h.idx, 1);
+  const u = C.unionPolys(A.polys, [poly]);
+  A.polys = u || A.polys.concat([poly]);
+  inval(A);
+  const whole = !h.p.polys.length;
+  if (whole) S.provs.delete(h.p.id); else inval(h.p);
+  tx.commit(); G.geomDirty = G.asgnDirty = true; need();
+  toast('Morceau fusionné dans « ' + A.name + ' »' + (whole ? ' (dernière partie : « ' + h.p.name + ' » supprimée)' : ' (' + h.p.polys.length + ' partie(s) restent dans « ' + h.p.name + ' »)') + (u ? '' : ' — contours non concordants, parties conservées'));
+}
+function detachClick(wx, wy) {
+  const h = hitPart(wx, wy);
+  if (!h) return;
+  const host = h.p, idx = h.idx;
+  if (host.polys.length < 2) { toast('Cette province n’a qu’une seule partie'); return; }
+  const tx = new Tx(); tx.touch(host);
+  const [poly] = host.polys.splice(idx, 1); inval(host);
+  const np = addProvince(nextName(host.name), [poly], host.country);
+  np.region = host.region; np.terrain = host.terrain; tx.born(np);
+  S.sel = np.id; tx.commit(); syncUI();
+  toast('Partie détachée : « ' + np.name + ' » (' + host.polys.length + ' partie(s) restent dans « ' + host.name + ' »)');
+}
 function deleteSel() {
   const p = S.provs.get(S.sel);
   if (!p) return;
@@ -1443,6 +1485,8 @@ function toolDown(e, px, py) {
     else if (S.tool === 'cut') cutDown(e, px, py, wx, wy, right);
     else if (S.tool === 'merge') mergeClick(wx, wy);
     else if (S.tool === 'fill' && !right) fillDown(wx, wy);
+    else if (S.tool === 'detach' && !right) detachClick(wx, wy);
+    else if (S.tool === 'mergepart' && !right) mergePartClick(wx, wy);
     else if (S.tool === 'vertex') vertexDown(e, px, py, wx, wy, right);
     else if (S.tool === 'weld' && !right) weldDown(wx, wy);
   } else if (S.tool === 'pipette') pipetteAt(wx, wy);
@@ -1581,6 +1625,8 @@ window.addEventListener('keydown', e => {
   if (k === 'delete' || k === 'backspace') { if (S.view === 'prov') deleteSel(); return; }
   if (['1', '2', '3', '4', '5'].includes(k)) { setView(['prov', 'country', 'region', 'terrain', 'bg'][+k - 1]); return; }
   if (k === 'z' && S.view === 'prov') { explodeSel(); return; }
+  if (k === 'r' && S.view === 'prov') { setTool(S.tool === 'mergepart' ? 'select' : 'mergepart'); return; }
+  if (k === 'x' && S.view === 'prov') { setTool(S.tool === 'detach' ? 'select' : 'detach'); return; }
   const map = S.view === 'prov'
     ? { a: 'select', c: 'cut', e: 'merge', d: 'vertex', w: 'weld', p: 'poly', f: 'fill', h: 'hand' }
     : S.view === 'bg' ? { b: 'bgmove', h: 'hand' }
@@ -1607,6 +1653,8 @@ const HINTS = {
   'prov:cut': 'Trace au stylet/souris à travers les terres, ou clique des points puis double-clic / Entrée. Dépasse de chaque côté. Clic droit = retire le dernier point, Échap annule.',
   'prov:merge': 'Sélectionne une province, puis clique les voisines : elles sont absorbées par la première (la frontière commune disparaît).',
   'prov:fill': 'Clique dans une zone vide entre des provinces : une province prend exactement la forme du vide (type : voir le panneau). Reclique sur Remplir (ou A) pour quitter.',
+  'prov:mergepart': 'Sélectionne une province (ou clique-la), puis clique le morceau voisin à absorber : seul ce morceau passe dans la première, le reste de sa province ne bouge pas. Reclique sur Fusion morceau (ou R) pour quitter.',
+  'prov:detach':'Clique une partie d’une province multi-parties (île, enclave…) : seule cette partie devient une nouvelle province, les autres restent ensemble. Reclique sur Détacher (ou X) pour quitter.',
   'prov:poly': 'Clique des points (ils s’accrochent aux sommets existants) ; ferme en recliquant le 1er point, double-clic ou Entrée. Dans une terre = trou (lac), dans le vide = nouvelle zone. Type : voir le panneau.',
   'prov:weld': 'Pinceau (action au choix dans le panneau) — Fusionner : clique ou glisse, tous les sommets sous le cercle fusionnent en un seul (voisines incluses). Supprimer : reste cliqué et passe sur les provinces pour les sélectionner (rouge), relâche = suppression. [ ] ou le curseur du panneau = taille. Annuler = Ctrl+Z.',
   'bg:bgmove': 'Choisis un fond dans le panneau, glisse-le pour le déplacer ; poignées dans les coins = redimensionner (ratio conservé).',
@@ -1621,7 +1669,7 @@ function setView(v) {
   S.tool = TOOLS[v][0][0];
   syncUI(); need();
 }
-function setTool(t) { if (!(S.view === 'prov' && t === 'fill') && !TOOLS[S.view].some(x => x[0] === t)) return; S.tool = t; cutReset(); syncUI(); need(); cv.style.cursor = cursorFor(); }
+function setTool(t) { if (!(S.view === 'prov' && (t === 'fill' || t === 'detach' || t === 'mergepart')) && !TOOLS[S.view].some(x => x[0] === t)) return; S.tool = t; cutReset(); syncUI(); need(); cv.style.cursor = cursorFor(); }
 
 function syncUI() {
   // vues
@@ -1629,9 +1677,9 @@ function syncUI() {
   for (const b of $('#views').children) b.onclick = () => setView(b.dataset.v);
   // outils
   $('#tools').innerHTML = TOOLS[S.view].map(([k, ic, n, key]) => `<button data-t="${k}" class="${S.tool === k ? 'on' : ''}" title="${n} (${key})"><i>${ic}</i><small>${n}</small></button>`).join('')
-    + (S.view === 'prov' ? '<hr><button id="bExplode" title="Éclater en parties (Z)"><i>✺</i><small>Éclater</small></button><button id="bDel" title="Supprimer (Suppr)"><i>🗑</i><small>Suppr.</small></button><button id="bOcean" title="Générer les mers/océans (complément des terres)"><i>🌊</i><small>Océans</small></button><button id="bFill" class="' + (S.tool === 'fill' ? 'on' : '') + '" title="Remplir une zone vide d’un clic (F)"><i>🪣</i><small>Remplir</small></button>' : '');
+    + (S.view === 'prov' ? '<hr><button id="bExplode" title="Éclater en parties (Z)"><i>✺</i><small>Éclater</small></button><button id="bDetach" class="' + (S.tool === 'detach' ? 'on' : '') + '" title="Détacher une seule partie (X)"><i>✂️</i><small>Détacher</small></button><button id="bMergePart" class="' + (S.tool === 'mergepart' ? 'on' : '') + '" title="Fusionner seulement le morceau cliqué (R)"><i>🧩</i><small>Fusion morceau</small></button><button id="bDel" title="Supprimer (Suppr)"><i>🗑</i><small>Suppr.</small></button><button id="bOcean" title="Générer les mers/océans (complément des terres)"><i>🌊</i><small>Océans</small></button><button id="bFill" class="' + (S.tool === 'fill' ? 'on' : '') + '" title="Remplir une zone vide d’un clic (F)"><i>🪣</i><small>Remplir</small></button>' : '');
   for (const b of $('#tools').querySelectorAll('[data-t]')) b.onclick = () => setTool(b.dataset.t);
-  if ($('#bExplode')) { $('#bExplode').onclick = explodeSel; $('#bDel').onclick = deleteSel; $('#bOcean').onclick = generateOcean; $('#bFill').onclick = () => setTool(S.tool === 'fill' ? 'select' : 'fill'); }
+  if ($('#bExplode')) { $('#bExplode').onclick = explodeSel; $('#bDetach').onclick = () => setTool(S.tool === 'detach' ? 'select' : 'detach'); $('#bMergePart').onclick = () => setTool(S.tool === 'mergepart' ? 'select' : 'mergepart'); $('#bDel').onclick = deleteSel; $('#bOcean').onclick = generateOcean; $('#bFill').onclick = () => setTool(S.tool === 'fill' ? 'select' : 'fill'); }
   $('#bUndo').disabled = !S.undo.length; $('#bRedo').disabled = !S.redo.length;
   $('#hint').textContent = HINTS[S.view + ':' + S.tool] || '';
   $('#hint').hidden = !$('#hint').textContent;
