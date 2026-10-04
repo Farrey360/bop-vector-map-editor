@@ -718,9 +718,34 @@ function cutMove(px, py, wx, wy) {
   cut.hover = [wx, wy];
   need();
 }
+/* Douglas-Peucker sur un tracé plat [x0,y0,x1,y1…] : garde les extrémités, retire les points à moins de tol (unités monde) de la corde. */
+function rdpFlat(a, tol) {
+  const n = a.length / 2;
+  if (n <= 2) return a;
+  const keep = new Uint8Array(n); keep[0] = keep[n - 1] = 1;
+  const st = [[0, n - 1]];
+  while (st.length) {
+    const [i0, i1] = st.pop();
+    if (i1 <= i0 + 1) continue;
+    const ax = a[2 * i0], ay = a[2 * i0 + 1], dx = a[2 * i1] - ax, dy = a[2 * i1 + 1] - ay, L = Math.hypot(dx, dy);
+    let best = -1, bi = -1;
+    for (let i = i0 + 1; i < i1; i++) {
+      const px = a[2 * i], py = a[2 * i + 1];
+      const d = L === 0 ? Math.hypot(px - ax, py - ay) : Math.abs(dx * (py - ay) - dy * (px - ax)) / L;
+      if (d > best) { best = d; bi = i; }
+    }
+    if (best > tol) { keep[bi] = 1; st.push([i0, bi], [bi, i1]); }
+  }
+  const out = [];
+  for (let i = 0; i < n; i++) if (keep[i]) out.push(a[2 * i], a[2 * i + 1]);
+  return out;
+}
 function cutUp(px, py, wx, wy) {
   if (cut.free) {
     cut.free.push(wx, wy);
+    // tracé libre : on le simplifie (tolérance 2 px d'écran) pour ne pas semer des centaines de sommets
+    const [ox, oy] = s2w(0, 0), [tx_, ty_] = s2w(2, 0);
+    cut.free = rdpFlat(cut.free, Math.hypot(tx_ - ox, ty_ - oy));
     const line = cut.pts.concat(cut.free);
     cutReset(); applyCut(line);
   } else if (cut.down) {
