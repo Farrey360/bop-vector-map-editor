@@ -1277,30 +1277,40 @@ async function vecCreate() {
     if (!cells.length) { toast('Rien à créer'); return; }
     const lands = [], blocks = [];
     for (const p of S.provs.values()) { if (disjoint(bbOf(p), bb)) continue; (p.terrain === 10 || p.terrain === 12 ? blocks : lands).push(p); }
-    let landG = null;
-    if (VX.coast) {
-      if (!lands.length) { toast('Aucune terre existante dans la zone : décoche « garder la côte »'); return; }
-      landG = pc.union(...lands.flatMap(p => p.polys.map(pcPoly)));
-    }
+    if (VX.coast && !lands.length) { toast('Aucune terre existante dans la zone : décoche « garder la côte »'); return; }
     const blockG = blocks.flatMap(p => p.polys.map(pcPoly));
+    const countryG = new Map();          // pays -> terres du pays (côte + frontières existantes intactes)
+    const landOf = id => {
+      if (!countryG.has(id)) { const ps = lands.filter(p => p.country === id); countryG.set(id, ps.length ? pc.union(...ps.flatMap(p => p.polys.map(pcPoly))) : null); }
+      return countryG.get(id);
+    };
+    const best = m => { let b = 0, ba = 0; for (const [id, a] of m) if (a > ba) { ba = a; b = id; } return b; };
     const made = [];
     for (const c of cells) {
-      let g = c.g;
-      try { g = landG ? pc.intersection(g, landG) : blockG.length ? pc.difference(g, ...blockG) : g; } catch (err) { continue; }
+      let country = 0, region = 0, g = c.g;
+      if (VX.coast) {                    // pays dominant sous la zone, puis découpe aux limites de ce pays
+        const cb0 = [Infinity, Infinity, -Infinity, -Infinity];
+        for (const pl of c.g) C.ringBBox(pl[0].flat(), cb0);
+        const ov = [], byC = new Map();
+        for (const p of lands) {
+          if (disjoint(bbOf(p), cb0)) continue;
+          let a = 0;
+          try { a = C.polysArea(pcBack(pc.intersection(c.g, p.polys.map(pcPoly)))); } catch (err) { continue; }
+          if (a <= 0) continue;
+          ov.push([p, a]); if (p.country) byC.set(p.country, (byC.get(p.country) || 0) + a);
+        }
+        if (!ov.length) continue;
+        country = best(byC);
+        const byR = new Map();
+        for (const [p, a] of ov) if (p.country === country && p.region) byR.set(p.region, (byR.get(p.region) || 0) + a);
+        region = best(byR);
+        const lg = landOf(country);
+        if (!lg) continue;
+        try { g = pc.intersection(c.g, lg); } catch (err) { continue; }
+      } else if (blockG.length) { try { g = pc.difference(g, ...blockG); } catch (err) { continue; } }
       const polys = pcBack(g);
       if (!polys.length) continue;
-      const cb = [Infinity, Infinity, -Infinity, -Infinity];
-      for (const pl of polys) C.ringBBox(pl[0], cb);
-      const byC = new Map(), byR = new Map(), gg = polys.map(pcPoly);
-      for (const p of lands) {
-        if (disjoint(bbOf(p), cb) || (!p.country && !p.region)) continue;
-        let a = 0;
-        try { a = C.polysArea(pcBack(pc.intersection(gg, p.polys.map(pcPoly)))); } catch (err) { continue; }
-        if (p.country) byC.set(p.country, (byC.get(p.country) || 0) + a);
-        if (p.region) byR.set(p.region, (byR.get(p.region) || 0) + a);
-      }
-      const best = m => { let b = 0, ba = 0; for (const [id, a] of m) if (a > ba) { ba = a; b = id; } return b; };
-      made.push({ polys, country: best(byC), region: best(byR), g: gg });
+      made.push({ polys, country, region, g: polys.map(pcPoly) });
     }
     if (!made.length) { toast('Rien à créer : les zones sortent de la terre existante'); return; }
     const tx = new Tx();
@@ -1320,6 +1330,7 @@ async function vecCreate() {
       const perim = polys => { let t = 0; for (const pl of polys) for (const r of pl) { for (let i = 0; i < r.length; i += 2) { const j = (i + 2) % r.length; t += Math.hypot(r[j] - r[i], r[j + 1] - r[i + 1]); } } return t; };
       const thin = pl => { const a = C.polysArea([pl]), q = perim([pl]); return a < 2 * thr * thr || (q > 0 && 2 * a / q < thr); };
       const bbP = polys => { const b = [Infinity, Infinity, -Infinity, -Infinity]; for (const pl of polys) C.ringBBox(pl[0], b); return b; };
+      const cOf = e => (e.p || e.m).country;
       const slivers = [];
       for (const e of ents) {
         if (!e.polys.length) continue;
@@ -1334,14 +1345,14 @@ async function vecCreate() {
         const sp = perim([s.pl]);
         let best = null, bs = 1e-9;
         for (const e of ents) {
-          if (e === s.e || !e.polys.length || disjoint(bbP(e.polys), sb)) continue;
+          if (e === s.e || !e.polys.length || cOf(e) !== cOf(s.e) || disjoint(bbP(e.polys), sb)) continue;   // jamais à travers une frontière de pays
           let u; try { u = pcBack(pc.union(e.polys.map(pcPoly), [pcPoly(s.pl)])); } catch (err) { continue; }
           if (u.length >= e.polys.length + 1) continue;      // pas de contact
           const sh = (sp + perim(e.polys) - perim(u)) / 2;
           if (sh > bs) { bs = sh; best = { e, u }; }
         }
         if (best) best.e.polys = best.u;
-        else if (s.e.p || C.polysArea([s.pl]) >= 2 * thr * thr) s.e.polys.push(s.pl);   // sans voisine : on garde (ancienne) ou si pas minuscule
+        else s.e.polys.push(s.pl);        // sans voisine : on garde (jamais de terre perdue)
       }
     }
     for (const e of ents) {
