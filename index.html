@@ -1127,7 +1127,7 @@ function addBgFromFile(file) {
    Outil « Vectoriser » (vue Fonds) : un rectangle sur le fond sélectionné → zones détectées (vectorize.js)
    → on exclut ce qu'on ne veut pas (clic) → « Créer » : une province par zone, frontières communes partagées,
    coupées à la côte existante, et elles remplacent les provinces qu'elles recouvrent. */
-const VX = { rect: null, opts: { tol: 24, r: 1, minArea: 0, sliver: 4, smooth: 6 }, coast: true, seg: null, excl: new Set(), crop: null, overlay: null };
+const VX = { rect: null, opts: { tol: 24, r: 1, minArea: 0, sliver: 4, smooth: 1, detail: 1 }, coast: true, seg: null, excl: new Set(), crop: null, overlay: null };
 function vecLayer() { const l = S.bg[S.bgSel]; return l && l.img && l.img.complete && l.img.naturalWidth ? l : null; }
 function vecReset() { VX.rect = null; VX.seg = null; VX.excl = new Set(); VX.crop = null; VX.overlay = null; need(); if (S.view === 'bg' && S.tool === 'vec') renderPanel(); }
 function vecDown(wx, wy, e) {
@@ -1157,15 +1157,21 @@ async function vecRun() {
   busy(true, 'Détection des zones…');
   await new Promise(r => setTimeout(r, 30));
   try {
-    const f = Math.min(1, 2600 / Math.max(sw, sh)), cw = Math.max(1, Math.round(sw * f)), ch = Math.max(1, Math.round(sh * f));
+    // Précision : l'image est agrandie (interpolée) avant la détection -> les traits noirs sont suivis au sous-pixel
+    const u0 = VX.opts.detail || 1;
+    let f = Math.min(u0, 2600 * u0 / Math.max(sw, sh));
+    f = Math.min(f, Math.sqrt(12e6 / (sw * sh)), 6000 / Math.max(sw, sh));
+    if (u0 === 1) f = Math.min(1, 2600 / Math.max(sw, sh));
+    const cw = Math.max(1, Math.round(sw * f)), ch = Math.max(1, Math.round(sh * f)), u = Math.max(1, f);
     const c = document.createElement('canvas'); c.width = cw; c.height = ch;
     const g = c.getContext('2d', { willReadFrequently: true });
+    g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
     g.drawImage(l.img, sx0, sy0, sw, sh, 0, 0, cw, ch);
     const id = g.getImageData(0, 0, cw, ch);
-    const minArea = VX.opts.minArea || Math.max(30, Math.round(cw * ch * 0.0001));
-    const seg = VEC.segment(id, { tol: VX.opts.tol, r: VX.opts.r, minArea });
+    const minArea = VX.opts.minArea ? Math.round(VX.opts.minArea * u * u) : Math.max(30, Math.round(cw * ch * 0.0001));
+    const seg = VEC.segment(id, { tol: VX.opts.tol, r: Math.max(1, Math.round(VX.opts.r * Math.max(1, u * 0.75))), minArea });
     const kx = (l.x1 - l.x0) / iw, ky = (l.y1 - l.y0) / ih;
-    VX.crop = { wx0: l.x0 + sx0 * kx, wx1: l.x0 + sx1 * kx, wy1: l.y1 - sy0 * ky, wy0: l.y1 - sy1 * ky, cw, ch };
+    VX.crop = { wx0: l.x0 + sx0 * kx, wx1: l.x0 + sx1 * kx, wy1: l.y1 - sy0 * ky, wy0: l.y1 - sy1 * ky, cw, ch, u };
     VX.seg = seg; VX.excl = new Set();
     for (let i = 1; i <= seg.n; i++) if (seg.info[i].bg) VX.excl.add(i);
     if (!seg.n) { toast('Aucune zone détectée : essaie une sensibilité plus haute'); VX.seg = null; }
@@ -1226,6 +1232,7 @@ function renderVecPanel(el) {
     <div class="row"><label>Sensibilité</label><input type="range" id="vTol" min="6" max="90" value="${o.tol}"><span class="kv" id="vTolV">${o.tol}</span></div>
     <div class="row"><label>Traits épais</label><input type="range" id="vR" min="1" max="4" value="${o.r}"><span class="kv" id="vRV">${o.r}</span></div>
     <div class="row"><label>Taille mini</label><input type="range" id="vMin" min="0" max="2000" step="10" value="${o.minArea}"><span class="kv" id="vMinV">${o.minArea || 'auto'}</span></div>
+    <div class="row"><label>Précision</label><input type="range" id="vDt" min="1" max="4" value="${o.detail}"><span class="kv" id="vDtV">×${o.detail}</span></div>
     <div class="row"><label>Lissage</label><input type="range" id="vSm" min="0" max="30" value="${o.smooth}"><span class="kv" id="vSmV">${o.smooth || 'off'}</span></div>
     <div class="row"><label>Anti-éclats</label><input type="range" id="vSl" min="0" max="12" value="${o.sliver}"><span class="kv" id="vSlV">${o.sliver || 'off'}</span></div>
     <div class="row"><label style="width:auto"><input type="checkbox" id="vCoast" ${VX.coast ? 'checked' : ''}> garder la côte existante (couper aux terres)</label></div>
@@ -1237,7 +1244,7 @@ function renderVecPanel(el) {
     e.oninput = () => { o[key] = +e.value; $('#' + vid).textContent = fmt(o[key]); };
     e.onchange = rerun;
   };
-  bind('vTol', 'tol', 'vTolV', v => v); bind('vR', 'r', 'vRV', v => v); bind('vMin', 'minArea', 'vMinV', v => v || 'auto');
+  bind('vDt', 'detail', 'vDtV', v => '×' + v); bind('vTol', 'tol', 'vTolV', v => v); bind('vR', 'r', 'vRV', v => v); bind('vMin', 'minArea', 'vMinV', v => v || 'auto');
   $('#vSm').oninput = e => { o.smooth = +e.target.value; $('#vSmV').textContent = o.smooth || 'off'; };
   $('#vSl').oninput = e => { o.sliver = +e.target.value; $('#vSlV').textContent = o.sliver || 'off'; };
   $('#vCoast').onchange = e => { VX.coast = e.target.checked; };
@@ -1327,7 +1334,7 @@ async function vecCreate() {
     }
     for (const m of made) ents.push({ m, polys: m.polys });
     // anti-éclats : les petits bouts fins (bords mal alignés) sont fusionnés dans la voisine au plus long bord commun
-    const thr = (VX.opts.sliver || 0) * Math.max(kx, ky);
+    const thr = (VX.opts.sliver || 0) * Math.max(kx, ky) * (k.u || 1);
     if (thr > 0) {
       const perim = polys => { let t = 0; for (const pl of polys) for (const r of pl) { for (let i = 0; i < r.length; i += 2) { const j = (i + 2) % r.length; t += Math.hypot(r[j] - r[i], r[j + 1] - r[i + 1]); } } return t; };
       const thin = pl => { const a = C.polysArea([pl]), q = perim([pl]); return a < 2 * thr * thr || (q > 0 && 2 * a / q < thr); };
