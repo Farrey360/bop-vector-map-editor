@@ -515,9 +515,10 @@ function draw() {
     ctx.lineWidth = (S.view === 'prov' ? 0.9 : 0.6) * px;
     strokeAll(G.bProv, ctx);
     if (S.view === 'region') { ctx.strokeStyle = '#000'; ctx.lineWidth = 2.6 * px; strokeAll(G.bRegion, ctx); }
-    if (S.view === 'country' || S.view === 'region') {
+    if (S.view === 'prov') { ctx.strokeStyle = 'rgba(255,255,255,.95)'; ctx.lineWidth = 1.6 * px; strokeAll(G.bRegion, ctx); }
+    if (S.view === 'country' || S.view === 'region' || S.view === 'prov') {
       ctx.strokeStyle = S.view === 'region' ? 'rgba(255,255,255,.9)' : '#000';
-      ctx.lineWidth = (S.view === 'region' ? 3 : 2.6) * px; strokeAll(G.bCountry, ctx);
+      ctx.lineWidth = (S.view === 'region' ? 3 : S.view === 'prov' ? 1.8 : 2.6) * px; strokeAll(G.bCountry, ctx);
     }
   }
 
