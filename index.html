@@ -220,18 +220,26 @@ function rebuildEdges() {
   G.geomDirty = false;
   G.asgnDirty = true;
 }
+/* Les bordures sont découpées en plusieurs Path2D (≤ 30 000 arêtes) : un seul chemin géant
+   fait abandonner à Chrome tout ce qui est dessiné après (sélection, sommets… invisibles). */
+const BCHUNK = 30000;
+function chunkedPath() {
+  const list = []; let cur = null, n = 0;
+  return { list, seg(x1, y1, x2, y2) { if (!cur || n >= BCHUNK) { cur = new Path2D(); list.push(cur); n = 0; } cur.moveTo(x1, y1); cur.lineTo(x2, y2); n++; } };
+}
+const strokeAll = (list, c) => { for (const p of list) c.stroke(p); };
 function rebuildBorders() {
-  const pr = new Path2D(), co = new Path2D(), re = new Path2D();
+  const pr = chunkedPath(), co = chunkedPath(), re = chunkedPath();
   for (const e of G.edges) {
     if (e.a === e.b) continue;
-    pr.moveTo(e.x1, e.y1); pr.lineTo(e.x2, e.y2);
+    pr.seg(e.x1, e.y1, e.x2, e.y2);
     if (!e.b) continue;
     const A = S.provs.get(e.a), B = S.provs.get(e.b);
     if (!A || !B) continue;
-    if (A.country !== B.country) { co.moveTo(e.x1, e.y1); co.lineTo(e.x2, e.y2); }
-    if (A.region !== B.region) { re.moveTo(e.x1, e.y1); re.lineTo(e.x2, e.y2); }
+    if (A.country !== B.country) co.seg(e.x1, e.y1, e.x2, e.y2);
+    if (A.region !== B.region) re.seg(e.x1, e.y1, e.x2, e.y2);
   }
-  G.bProv = pr; G.bCountry = co; G.bRegion = re;
+  G.bProv = pr.list; G.bCountry = co.list; G.bRegion = re.list;
   G.asgnDirty = false;
 }
 
@@ -462,6 +470,7 @@ function renderScene(c, w, h, cam, opts) {
   const vis = [];
   for (const p of S.provs.values()) { if (!disjoint(bbOf(p), vp)) vis.push(p); }
   const fillOf = p => {
+    if (p.terrain === 12) return '#ffffff';   // lacs : toujours blanc pur, dans toutes les vues
     if (view === 'country' || view === 'bg') { const q = S.countries.get(p.country); return q ? q.color : NONE_COLOR; }
     if (view === 'region') { const q = S.regions.get(p.region); return q ? q.color : NONE_COLOR; }
     if (view === 'terrain') return p.terrain === NOT_SET ? NONE_COLOR : TERRAINS[p.terrain][1];
@@ -504,11 +513,11 @@ function draw() {
   } else if (G.bProv) {
     ctx.strokeStyle = S.view === 'prov' ? 'rgba(0,0,0,.6)' : 'rgba(0,0,0,.28)';
     ctx.lineWidth = (S.view === 'prov' ? 0.9 : 0.6) * px;
-    ctx.stroke(G.bProv);
-    if (S.view === 'region') { ctx.strokeStyle = 'rgba(0,0,0,.8)'; ctx.lineWidth = 1.3 * px; ctx.stroke(G.bRegion); }
+    strokeAll(G.bProv, ctx);
+    if (S.view === 'region') { ctx.strokeStyle = '#000'; ctx.lineWidth = 2.6 * px; strokeAll(G.bRegion, ctx); }
     if (S.view === 'country' || S.view === 'region') {
-      ctx.strokeStyle = S.view === 'region' ? 'rgba(255,255,255,.9)' : 'rgba(0,0,0,.9)';
-      ctx.lineWidth = (S.view === 'region' ? 2 : 1.6) * px; ctx.stroke(G.bCountry);
+      ctx.strokeStyle = S.view === 'region' ? 'rgba(255,255,255,.9)' : '#000';
+      ctx.lineWidth = (S.view === 'region' ? 3 : 2.6) * px; strokeAll(G.bCountry, ctx);
     }
   }
 
@@ -1746,7 +1755,7 @@ function renderPanel() {
     const isC = S.view === 'country', map = isC ? S.countries : S.regions, cur = map.get(isC ? S.actC : S.actR);
     const count = cur ? [...S.provs.values()].filter(p => (isC ? p.country : p.region) === cur.id).length : 0;
     el.innerHTML = `<h3>${isC ? 'Pays' : 'Régions'}</h3>
-      <div class="row"><select id="cSel">${opts(byName(map), cur ? cur.id : 0, isC ? '— choisir —' : '— choisir —')}</select><button id="cAdd" title="Nouveau" style="flex:none">＋</button></div>
+      <div class="row"><select id="cSel">${opts(byName(map), cur ? cur.id : 0, isC ? '— choisir —' : '— choisir —')}</select><button id="cUp" title="Précédent (ordre alphabétique)" style="flex:none;padding:4px 7px">▲</button><button id="cDn" title="Suivant (ordre alphabétique)" style="flex:none;padding:4px 7px">▼</button><button id="cAdd" title="Nouveau" style="flex:none">＋</button></div>
       ${cur ? `<div class="row"><input type="color" id="cCol" value="${cur.color}"><input type="text" id="cName" value="${esc(cur.name)}"></div>
       ${isC ? `<div class="row"><label>Code</label><input type="text" id="cTag" maxlength="4" value="${esc(cur.tag || '')}"></div>`
             : `<div class="row"><label>Habitants</label><input type="number" id="cPop" min="0" value="${cur.pop || 0}"></div>`}
@@ -1755,6 +1764,14 @@ function renderPanel() {
       <div class="row"><button id="cDel" class="danger">Supprimer ${isC ? 'ce pays' : 'cette région'}</button></div>` : ''}
       ${isC ? '' : `<div class="row"><label style="width:auto"><input type="checkbox" id="cOv" ${S.overlayCountry ? 'checked' : ''}> pays en transparence</label></div>`}`;
     $('#cSel').onchange = e => { if (isC) S.actC = +e.target.value; else S.actR = +e.target.value; syncUI(); };
+    const step = d => {
+      const list = byName(map); if (!list.length) return;
+      const i = list.findIndex(o => o.id === (cur ? cur.id : 0));
+      const n = list[i < 0 ? (d > 0 ? 0 : list.length - 1) : (i + d + list.length) % list.length];
+      if (isC) S.actC = n.id; else S.actR = n.id; syncUI(); need();
+    };
+    $('#cUp').onclick = () => step(-1);
+    $('#cDn').onclick = () => step(1);
     $('#cAdd').onclick = () => {
       if (isC) S.actC = addCountry('Nouveau pays', '');
       else { const id = S.nextRegion++; S.regions.set(id, { id, name: 'Nouvelle région', color: C.autoColor(id * 5 + 2), pop: 0, notes: '' }); S.actR = id; }
