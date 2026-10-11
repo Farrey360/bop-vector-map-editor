@@ -403,8 +403,10 @@ function markDirty() {
   clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 4000);
 }
 function setSaved(t) { const el = $('#saved'); if (el) el.textContent = t; }
+const drawing = () => !!act || cut.pts.length > 0 || pdraw.pts.length > 0;
 async function saveNow(noCloud) {
   clearTimeout(saveTimer);
+  if (noCloud !== true && S.dirty && drawing()) { saveTimer = setTimeout(saveNow, 1500); return; }   // pas de sauvegarde (gel) pendant qu'on dessine
   if (!S.id || !DB.db) { setSaved(DB.db ? '' : 'stockage indisponible'); if (noCloud !== true) cloudSchedule(); return; }
   try {
     await DB.put({ id: S.id, name: S.name, updated: Date.now(), thumb: makeThumb(), nProv: S.provs.size, cloud: S.cloudName }, serialize());
@@ -1125,7 +1127,7 @@ function addBgFromFile(file) {
    Outil « Vectoriser » (vue Fonds) : un rectangle sur le fond sélectionné → zones détectées (vectorize.js)
    → on exclut ce qu'on ne veut pas (clic) → « Créer » : une province par zone, frontières communes partagées,
    coupées à la côte existante, et elles remplacent les provinces qu'elles recouvrent. */
-const VX = { rect: null, opts: { tol: 24, r: 1, minArea: 0 }, coast: true, seg: null, excl: new Set(), crop: null, overlay: null };
+const VX = { rect: null, opts: { tol: 24, r: 1, minArea: 0, sliver: 4 }, coast: true, seg: null, excl: new Set(), crop: null, overlay: null };
 function vecLayer() { const l = S.bg[S.bgSel]; return l && l.img && l.img.complete && l.img.naturalWidth ? l : null; }
 function vecReset() { VX.rect = null; VX.seg = null; VX.excl = new Set(); VX.crop = null; VX.overlay = null; need(); if (S.view === 'bg' && S.tool === 'vec') renderPanel(); }
 function vecDown(wx, wy, e) {
@@ -1224,6 +1226,7 @@ function renderVecPanel(el) {
     <div class="row"><label>Sensibilité</label><input type="range" id="vTol" min="6" max="90" value="${o.tol}"><span class="kv" id="vTolV">${o.tol}</span></div>
     <div class="row"><label>Traits épais</label><input type="range" id="vR" min="1" max="4" value="${o.r}"><span class="kv" id="vRV">${o.r}</span></div>
     <div class="row"><label>Taille mini</label><input type="range" id="vMin" min="0" max="2000" step="10" value="${o.minArea}"><span class="kv" id="vMinV">${o.minArea || 'auto'}</span></div>
+    <div class="row"><label>Anti-éclats</label><input type="range" id="vSl" min="0" max="12" value="${o.sliver}"><span class="kv" id="vSlV">${o.sliver || 'off'}</span></div>
     <div class="row"><label style="width:auto"><input type="checkbox" id="vCoast" ${VX.coast ? 'checked' : ''}> garder la côte existante (couper aux terres)</label></div>
     ${s ? `<div class="row"><button id="vOk" ${kept ? '' : 'disabled'}>Créer ${kept} province${kept > 1 ? 's' : ''}</button></div>
     <div class="row"><button id="vNew">Nouvelle zone</button></div>` : `<div class="row"><button id="vAll" ${l ? '' : 'disabled'}>Toute l’image</button></div>`}`;
@@ -1234,6 +1237,7 @@ function renderVecPanel(el) {
     e.onchange = rerun;
   };
   bind('vTol', 'tol', 'vTolV', v => v); bind('vR', 'r', 'vRV', v => v); bind('vMin', 'minArea', 'vMinV', v => v || 'auto');
+  $('#vSl').oninput = e => { o.sliver = +e.target.value; $('#vSlV').textContent = o.sliver || 'off'; };
   $('#vCoast').onchange = e => { VX.coast = e.target.checked; };
   if ($('#vOk')) $('#vOk').onclick = vecCreate;
   if ($('#vNew')) $('#vNew').onclick = vecReset;
@@ -1301,15 +1305,52 @@ async function vecCreate() {
     if (!made.length) { toast('Rien à créer : les zones sortent de la terre existante'); return; }
     const tx = new Tx();
     const cover = pc.union(...made.flatMap(m => m.g));
+    const ents = [];                    // entités touchées : {p (ancienne) | m (nouvelle), polys}
     for (const p of lands) {            // les nouvelles provinces remplacent ce qu'elles recouvrent
       if (!p.polys.length) continue;
       let left;
       try { left = pcBack(pc.difference(p.polys.map(pcPoly), cover)); } catch (err) { continue; }
       if (left.length === p.polys.length && C.polysArea(left) >= C.polysArea(p.polys) - 1e-12) continue;
-      tx.touch(p);
-      if (!left.length) S.provs.delete(p.id); else { p.polys = left; inval(p); }
+      ents.push({ p, polys: left });
+    }
+    for (const m of made) ents.push({ m, polys: m.polys });
+    // anti-éclats : les petits bouts fins (bords mal alignés) sont fusionnés dans la voisine au plus long bord commun
+    const thr = (VX.opts.sliver || 0) * Math.max(kx, ky);
+    if (thr > 0) {
+      const perim = polys => { let t = 0; for (const pl of polys) for (const r of pl) { for (let i = 0; i < r.length; i += 2) { const j = (i + 2) % r.length; t += Math.hypot(r[j] - r[i], r[j + 1] - r[i + 1]); } } return t; };
+      const thin = pl => { const a = C.polysArea([pl]), q = perim([pl]); return a < 2 * thr * thr || (q > 0 && 2 * a / q < thr); };
+      const bbP = polys => { const b = [Infinity, Infinity, -Infinity, -Infinity]; for (const pl of polys) C.ringBBox(pl[0], b); return b; };
+      const slivers = [];
+      for (const e of ents) {
+        if (!e.polys.length) continue;
+        let big = 0;
+        if (e.m) for (let i = 1; i < e.polys.length; i++) if (C.polysArea([e.polys[i]]) > C.polysArea([e.polys[big]])) big = i;
+        const keepP = [];
+        e.polys.forEach((pl, i) => { if ((e.m && i === big) || !thin(pl)) keepP.push(pl); else slivers.push({ e, pl }); });
+        e.polys = keepP;
+      }
+      for (const s of slivers) {
+        const sb = bbP([s.pl]); sb[0] -= thr; sb[1] -= thr; sb[2] += thr; sb[3] += thr;
+        const sp = perim([s.pl]);
+        let best = null, bs = 1e-9;
+        for (const e of ents) {
+          if (e === s.e || !e.polys.length || disjoint(bbP(e.polys), sb)) continue;
+          let u; try { u = pcBack(pc.union(e.polys.map(pcPoly), [pcPoly(s.pl)])); } catch (err) { continue; }
+          if (u.length >= e.polys.length + 1) continue;      // pas de contact
+          const sh = (sp + perim(e.polys) - perim(u)) / 2;
+          if (sh > bs) { bs = sh; best = { e, u }; }
+        }
+        if (best) best.e.polys = best.u;
+        else if (s.e.p || C.polysArea([s.pl]) >= 2 * thr * thr) s.e.polys.push(s.pl);   // sans voisine : on garde (ancienne) ou si pas minuscule
+      }
+    }
+    for (const e of ents) {
+      if (e.m) { e.m.polys = e.polys; continue; }
+      tx.touch(e.p);
+      if (!e.polys.length) S.provs.delete(e.p.id); else { e.p.polys = e.polys; inval(e.p); }
     }
     for (const m of made) {
+      if (!m.polys.length) continue;
       const np = addProvince(nextLandName(), m.polys, m.country);
       np.region = m.region; tx.born(np);
     }
@@ -2258,7 +2299,7 @@ function cloudSchedule() {
   const c = CLOUD.load();
   if (!c || !c.auto || !cloudReady() || S.cloudConflict || $('#editor').hidden) return;
   clearTimeout(CLOUD.timer);
-  CLOUD.timer = setTimeout(() => cloudPush(false), c.delay || 15000);
+  CLOUD.timer = setTimeout(() => { if (drawing()) cloudSchedule(); else cloudPush(false); }, c.delay || 15000);
 }
 
 async function cloudCheck() {
