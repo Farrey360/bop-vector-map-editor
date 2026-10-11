@@ -124,7 +124,7 @@ input[type=color]{width:38px;height:32px;padding:2px;background:#0f1117;border:1
     <div class="seg" id="views"></div>
     <button id="bUndo" title="Annuler (Ctrl+Z)">↶</button>
     <button id="bRedo" title="Rétablir (Ctrl+Y)">↷</button>
-    <button id="bFit" title="Tout voir (F)">⤢</button>
+    <button id="bFit" title="Tout voir">⤢</button>
     <button id="bMenu" title="Menu">☰</button>
     <span id="saved"></span>
   </div>
@@ -145,6 +145,7 @@ input[type=color]{width:38px;height:32px;padding:2px;background:#0f1117;border:1
 <script src="core.js"></script>
 <script src="ne50.js"></script>
 <script src="polygon-clipping.min.js"></script>
+<script src="vectorize.js"></script>
 <script>
 'use strict';
 const C = BopCore;
@@ -505,6 +506,7 @@ function draw() {
   const { vis, s } = renderScene(ctx, W, H, S.cam, { k: dpr, view: S.view, overlay: S.overlayCountry, bg: true, alpha: S.provAlpha });
   const px = 1 / s;
   ctx.lineJoin = 'round';
+  vecDraw(ctx, px);
 
   if (dragging) {
     ctx.strokeStyle = 'rgba(0,0,0,.55)'; ctx.lineWidth = 0.8 * px;
@@ -1079,13 +1081,13 @@ async function completeWithNE() {
 }
 
 /* ===================================================================== fonds de référence */
-function bgHit(px, py, wx, wy) {
+function bgHit(px, py, wx, wy, e) {
   const l = S.bg[S.bgSel];
   if (!l) return;
   const [ax, ay] = w2s(l.x0, l.y1), [bx, by] = w2s(l.x1, l.y0);
   const corners = [[ax, ay, 'l', 't'], [bx, ay, 'r', 't'], [ax, by, 'l', 'b'], [bx, by, 'r', 'b']];
   for (const [cx, cy, hx, vy] of corners) {
-    if (Math.hypot(px - cx, py - cy) < 14) { act = { kind: 'bgresize', l, hx, vy, ratio: (l.y1 - l.y0) / (l.x1 - l.x0) }; return; }
+    if (Math.hypot(px - cx, py - cy) < 14) { act = { kind: 'bgresize', l, hx, vy, ratio: (l.y1 - l.y0) / (l.x1 - l.x0), free: !!(e && e.shiftKey) }; return; }
   }
   if (wx >= l.x0 && wx <= l.x1 && wy >= l.y0 && wy <= l.y1) act = { kind: 'bgmove', l, lx: wx, ly: wy };
 }
@@ -1096,7 +1098,7 @@ function bgMove(wx, wy) {
     l.x0 += dx; l.x1 += dx; l.y0 += dy; l.y1 += dy; a.lx = wx; a.ly = wy;
   } else {
     const ax = a.hx === 'l' ? l.x1 : l.x0, ay = a.vy === 't' ? l.y0 : l.y1;
-    const w = Math.max(Math.abs(wx - ax), 0.01), h = w * a.ratio;
+    const w = Math.max(Math.abs(wx - ax), 0.01), h = a.free ? Math.max(Math.abs(wy - ay), 0.01) : w * a.ratio;
     if (a.hx === 'l') { l.x0 = ax - w; l.x1 = ax; } else { l.x0 = ax; l.x1 = ax + w; }
     if (a.vy === 't') { l.y0 = ay; l.y1 = ay + h; } else { l.y0 = ay - h; l.y1 = ay; }
   }
@@ -1117,6 +1119,206 @@ function addBgFromFile(file) {
     img.src = src;
   };
   rd.readAsDataURL(file);
+}
+
+/* ===================================================================== vectorisation d'un fond
+   Outil « Vectoriser » (vue Fonds) : un rectangle sur le fond sélectionné → zones détectées (vectorize.js)
+   → on exclut ce qu'on ne veut pas (clic) → « Créer » : une province par zone, frontières communes partagées,
+   coupées à la côte existante, et elles remplacent les provinces qu'elles recouvrent. */
+const VX = { rect: null, opts: { tol: 24, r: 1, minArea: 0 }, coast: true, seg: null, excl: new Set(), crop: null, overlay: null };
+function vecLayer() { const l = S.bg[S.bgSel]; return l && l.img && l.img.complete && l.img.naturalWidth ? l : null; }
+function vecReset() { VX.rect = null; VX.seg = null; VX.excl = new Set(); VX.crop = null; VX.overlay = null; need(); if (S.view === 'bg' && S.tool === 'vec') renderPanel(); }
+function vecDown(wx, wy, e) {
+  if (!vecLayer()) { toast('Sélectionne d’abord un fond dans le panneau'); return; }
+  if (VX.seg) { vecToggle(wx, wy, e.shiftKey); return; }
+  act = { kind: 'vrect', x: wx, y: wy };
+  VX.rect = [wx, wy, wx, wy];
+}
+function vecRectDone() {
+  const r = VX.rect;
+  if (!r || Math.abs(r[2] - r[0]) * S.cam.s < 8 || Math.abs(r[3] - r[1]) * S.cam.s < 8) { VX.rect = null; need(); return; }
+  vecRun();
+}
+function vecAll() {
+  const l = vecLayer(); if (!l) { toast('Sélectionne d’abord un fond dans le panneau'); return; }
+  VX.rect = [l.x0, l.y0, l.x1, l.y1]; vecRun();
+}
+async function vecRun() {
+  const l = vecLayer(); if (!l || !VX.rect || !window.VEC) return;
+  const rx0 = Math.max(Math.min(VX.rect[0], VX.rect[2]), l.x0), rx1 = Math.min(Math.max(VX.rect[0], VX.rect[2]), l.x1);
+  const ry0 = Math.max(Math.min(VX.rect[1], VX.rect[3]), l.y0), ry1 = Math.min(Math.max(VX.rect[1], VX.rect[3]), l.y1);
+  const iw = l.img.naturalWidth, ih = l.img.naturalHeight;
+  const sx0 = Math.max(0, Math.floor((rx0 - l.x0) / (l.x1 - l.x0) * iw)), sx1 = Math.min(iw, Math.ceil((rx1 - l.x0) / (l.x1 - l.x0) * iw));
+  const sy0 = Math.max(0, Math.floor((l.y1 - ry1) / (l.y1 - l.y0) * ih)), sy1 = Math.min(ih, Math.ceil((l.y1 - ry0) / (l.y1 - l.y0) * ih));
+  const sw = sx1 - sx0, sh = sy1 - sy0;
+  if (!(sw >= 8 && sh >= 8)) { toast('Zone en dehors du fond'); VX.rect = null; need(); return; }
+  busy(true, 'Détection des zones…');
+  await new Promise(r => setTimeout(r, 30));
+  try {
+    const f = Math.min(1, 2600 / Math.max(sw, sh)), cw = Math.max(1, Math.round(sw * f)), ch = Math.max(1, Math.round(sh * f));
+    const c = document.createElement('canvas'); c.width = cw; c.height = ch;
+    const g = c.getContext('2d', { willReadFrequently: true });
+    g.drawImage(l.img, sx0, sy0, sw, sh, 0, 0, cw, ch);
+    const id = g.getImageData(0, 0, cw, ch);
+    const minArea = VX.opts.minArea || Math.max(30, Math.round(cw * ch * 0.0001));
+    const seg = VEC.segment(id, { tol: VX.opts.tol, r: VX.opts.r, minArea });
+    const kx = (l.x1 - l.x0) / iw, ky = (l.y1 - l.y0) / ih;
+    VX.crop = { wx0: l.x0 + sx0 * kx, wx1: l.x0 + sx1 * kx, wy1: l.y1 - sy0 * ky, wy0: l.y1 - sy1 * ky, cw, ch };
+    VX.seg = seg; VX.excl = new Set();
+    for (let i = 1; i <= seg.n; i++) if (seg.info[i].bg) VX.excl.add(i);
+    if (!seg.n) { toast('Aucune zone détectée : essaie une sensibilité plus haute'); VX.seg = null; }
+    vecOverlay(); need(); renderPanel();
+  } catch (err) { toast('Échec de la détection : ' + err.message); VX.seg = null; }
+  finally { busy(false); }
+}
+function vecOverlay() {
+  const s = VX.seg; if (!s) { VX.overlay = null; return; }
+  const { W, H } = s, o = document.createElement('canvas'); o.width = W; o.height = H;
+  const g = o.getContext('2d'), im = g.createImageData(W, H), d = im.data, L = s.labels;
+  const pal = new Array(s.n + 1);
+  for (let i = 1; i <= s.n; i++) {
+    const h = (i * 0.6180339) % 1, q = 6 * h, k = Math.floor(q), fr = q - k, v = 0.95, sa = 0.65;
+    const p = v * (1 - sa), qq = v * (1 - sa * fr), t = v * (1 - sa * (1 - fr));
+    const rgb = [[v, t, p], [qq, v, p], [p, v, t], [p, qq, v], [t, p, v], [v, p, qq]][k % 6];
+    pal[i] = rgb.map(x => Math.round(x * 255));
+  }
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const p = y * W + x, l = L[p], j = 4 * p, ex = VX.excl.has(l);
+    const edge = (x < W - 1 && L[p + 1] !== l) || (y < H - 1 && L[p + W] !== l);
+    if (edge) { d[j] = d[j + 1] = d[j + 2] = 0; d[j + 3] = 255; continue; }
+    if (ex) { d[j] = 30; d[j + 1] = 30; d[j + 2] = 40; d[j + 3] = ((x + y) >> 2) & 1 ? 170 : 110; }
+    else { d[j] = pal[l][0]; d[j + 1] = pal[l][1]; d[j + 2] = pal[l][2]; d[j + 3] = 140; }
+  }
+  g.putImageData(im, 0, 0);
+  VX.overlay = o;
+}
+function vecDraw(c, px) {
+  if (S.view !== 'bg') return;
+  if (VX.overlay && VX.crop) {
+    const k = VX.crop;
+    c.save(); c.translate(k.wx0, k.wy1); c.scale(1, -1); c.imageSmoothingEnabled = false;
+    c.drawImage(VX.overlay, 0, 0, k.wx1 - k.wx0, k.wy1 - k.wy0); c.restore();
+  } else if (VX.rect) {
+    const r = VX.rect;
+    c.strokeStyle = '#ffe14d'; c.lineWidth = 2 * px; c.setLineDash([6 * px, 4 * px]);
+    c.strokeRect(Math.min(r[0], r[2]), Math.min(r[1], r[3]), Math.abs(r[2] - r[0]), Math.abs(r[3] - r[1])); c.setLineDash([]);
+  }
+}
+function vecToggle(wx, wy, similar) {
+  const s = VX.seg, k = VX.crop; if (!s) return;
+  const x = Math.floor((wx - k.wx0) / (k.wx1 - k.wx0) * k.cw), y = Math.floor((k.wy1 - wy) / (k.wy1 - k.wy0) * k.ch);
+  if (x < 0 || y < 0 || x >= k.cw || y >= k.ch) return;
+  const l = s.labels[y * k.cw + x], off = !VX.excl.has(l);
+  const set = (i) => { if (off) VX.excl.add(i); else VX.excl.delete(i); };
+  if (similar) {
+    const c0 = s.info[l].color;
+    for (let i = 1; i <= s.n; i++) { const c = s.info[i].color; if (Math.abs(c[0] - c0[0]) + Math.abs(c[1] - c0[1]) + Math.abs(c[2] - c0[2]) < 20) set(i); }
+  } else set(l);
+  vecOverlay(); need(); renderPanel();
+}
+function renderVecPanel(el) {
+  const s = VX.seg, l = vecLayer(), o = VX.opts;
+  const kept = s ? s.n - VX.excl.size : 0;
+  el.innerHTML = `<h3>Vectoriser l’image</h3>
+    <div class="kv">${!l ? 'Sélectionne d’abord un fond (outil Placer, panneau de droite).' : s ? kept + ' zone' + (kept > 1 ? 's' : '') + ' gardée' + (kept > 1 ? 's' : '') + ' sur ' + s.n + '. Clique une zone pour l’exclure / la remettre (Maj+clic : toutes celles de la même couleur).' : 'Trace un rectangle autour de la zone à vectoriser (ou « Toute l’image »).'}</div>
+    <div class="row"><label>Sensibilité</label><input type="range" id="vTol" min="6" max="90" value="${o.tol}"><span class="kv" id="vTolV">${o.tol}</span></div>
+    <div class="row"><label>Traits épais</label><input type="range" id="vR" min="1" max="4" value="${o.r}"><span class="kv" id="vRV">${o.r}</span></div>
+    <div class="row"><label>Taille mini</label><input type="range" id="vMin" min="0" max="2000" step="10" value="${o.minArea}"><span class="kv" id="vMinV">${o.minArea || 'auto'}</span></div>
+    <div class="row"><label style="width:auto"><input type="checkbox" id="vCoast" ${VX.coast ? 'checked' : ''}> garder la côte existante (couper aux terres)</label></div>
+    ${s ? `<div class="row"><button id="vOk" ${kept ? '' : 'disabled'}>Créer ${kept} province${kept > 1 ? 's' : ''}</button></div>
+    <div class="row"><button id="vNew">Nouvelle zone</button></div>` : `<div class="row"><button id="vAll" ${l ? '' : 'disabled'}>Toute l’image</button></div>`}`;
+  const rerun = () => { if (VX.rect) vecRun(); };
+  const bind = (id, key, vid, fmt) => {
+    const e = $('#' + id);
+    e.oninput = () => { o[key] = +e.value; $('#' + vid).textContent = fmt(o[key]); };
+    e.onchange = rerun;
+  };
+  bind('vTol', 'tol', 'vTolV', v => v); bind('vR', 'r', 'vRV', v => v); bind('vMin', 'minArea', 'vMinV', v => v || 'auto');
+  $('#vCoast').onchange = e => { VX.coast = e.target.checked; };
+  if ($('#vOk')) $('#vOk').onclick = vecCreate;
+  if ($('#vNew')) $('#vNew').onclick = vecReset;
+  if ($('#vAll')) $('#vAll').onclick = vecAll;
+}
+const pcPoly = poly => poly.map(r => { const a = []; for (let i = 0; i < r.length; i += 2) a.push([r[i], r[i + 1]]); a.push([r[0], r[1]]); return a; });
+const pcBack = res => {   // résultat polygon-clipping -> polys [[anneaux plats]]
+  const out = [];
+  for (const pl of res) {
+    const rings = pl.map(r => cleanRing(r.flat())).filter(Boolean);
+    if (rings.length && cleanRing(pl[0].flat()) && C.polysArea([rings]) > 1e-9) out.push(rings.map((r, i) => C.orientRing(r, i === 0)));
+  }
+  return out;
+};
+async function vecCreate() {
+  const s = VX.seg, k = VX.crop; if (!s) return;
+  if (!window.polygonClipping) { toast('Bibliothèque de découpe absente (polygon-clipping.min.js)'); return; }
+  busy(true, 'Création des provinces…');
+  await new Promise(r => setTimeout(r, 30));
+  try {
+    const pc = window.polygonClipping;
+    const keep = new Uint8Array(s.n + 1);
+    for (let i = 1; i <= s.n; i++) if (!VX.excl.has(i)) keep[i] = 1;
+    const res = VEC.vectorize(s.labels, s.W, s.H, keep);
+    const kx = (k.wx1 - k.wx0) / k.cw, ky = (k.wy1 - k.wy0) / k.ch;
+    const cells = [], bb = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const polys of res.values()) {
+      const wp = [];
+      for (const pl of polys) {
+        const rings = pl.map(r => { const a = []; for (let i = 0; i < r.length; i += 2) a.push(k.wx0 + r[i] * kx, k.wy1 - r[i + 1] * ky); return cleanRing(a); });
+        if (rings[0]) wp.push(rings.filter(Boolean));
+      }
+      if (!wp.length) continue;
+      for (const pl of wp) C.ringBBox(pl[0], bb);
+      cells.push({ g: wp.map(pcPoly) });
+    }
+    if (!cells.length) { toast('Rien à créer'); return; }
+    const lands = [], blocks = [];
+    for (const p of S.provs.values()) { if (disjoint(bbOf(p), bb)) continue; (p.terrain === 10 || p.terrain === 12 ? blocks : lands).push(p); }
+    let landG = null;
+    if (VX.coast) {
+      if (!lands.length) { toast('Aucune terre existante dans la zone : décoche « garder la côte »'); return; }
+      landG = pc.union(...lands.flatMap(p => p.polys.map(pcPoly)));
+    }
+    const blockG = blocks.flatMap(p => p.polys.map(pcPoly));
+    const made = [];
+    for (const c of cells) {
+      let g = c.g;
+      try { g = landG ? pc.intersection(g, landG) : blockG.length ? pc.difference(g, ...blockG) : g; } catch (err) { continue; }
+      const polys = pcBack(g);
+      if (!polys.length) continue;
+      const cb = [Infinity, Infinity, -Infinity, -Infinity];
+      for (const pl of polys) C.ringBBox(pl[0], cb);
+      const byC = new Map(), byR = new Map(), gg = polys.map(pcPoly);
+      for (const p of lands) {
+        if (disjoint(bbOf(p), cb) || (!p.country && !p.region)) continue;
+        let a = 0;
+        try { a = C.polysArea(pcBack(pc.intersection(gg, p.polys.map(pcPoly)))); } catch (err) { continue; }
+        if (p.country) byC.set(p.country, (byC.get(p.country) || 0) + a);
+        if (p.region) byR.set(p.region, (byR.get(p.region) || 0) + a);
+      }
+      const best = m => { let b = 0, ba = 0; for (const [id, a] of m) if (a > ba) { ba = a; b = id; } return b; };
+      made.push({ polys, country: best(byC), region: best(byR), g: gg });
+    }
+    if (!made.length) { toast('Rien à créer : les zones sortent de la terre existante'); return; }
+    const tx = new Tx();
+    const cover = pc.union(...made.flatMap(m => m.g));
+    for (const p of lands) {            // les nouvelles provinces remplacent ce qu'elles recouvrent
+      if (!p.polys.length) continue;
+      let left;
+      try { left = pcBack(pc.difference(p.polys.map(pcPoly), cover)); } catch (err) { continue; }
+      if (left.length === p.polys.length && C.polysArea(left) >= C.polysArea(p.polys) - 1e-12) continue;
+      tx.touch(p);
+      if (!left.length) S.provs.delete(p.id); else { p.polys = left; inval(p); }
+    }
+    for (const m of made) {
+      const np = addProvince(nextLandName(), m.polys, m.country);
+      np.region = m.region; tx.born(np);
+    }
+    tx.commit(); G.geomDirty = G.asgnDirty = true;
+    const n = made.length;
+    vecReset();
+    toast(n + ' province' + (n > 1 ? 's' : '') + ' créée' + (n > 1 ? 's' : '') + ' (Ctrl+Z pour annuler)');
+  } catch (err) { toast('Échec : ' + err.message); console.error(err); }
+  finally { busy(false); }
 }
 
 /* ===================================================================== recherche / bilan / renommage */
@@ -1513,7 +1715,7 @@ const ptrs = new Map();
 
 function toolDown(e, px, py) {
   const [wx, wy] = s2w(px, py), right = e.button === 2;
-  if (S.view === 'bg') { if (S.tool === 'bgmove') bgHit(px, py, wx, wy); return; }
+  if (S.view === 'bg') { if (S.tool === 'bgmove') bgHit(px, py, wx, wy, e); else if (S.tool === 'vec') vecDown(wx, wy, e); return; }
   if (S.view === 'prov') {
     if (S.tool === 'select') { const p = hitProv(wx, wy); S.sel = p ? p.id : 0; syncUI(); need(); }
     else if (S.tool === 'poly') polyDown(px, py, wx, wy, right);
@@ -1572,6 +1774,7 @@ cv.addEventListener('pointermove', e => {
   }
   switch (act.kind) {
     case 'bgmove': case 'bgresize': bgMove(wx, wy); break;
+    case 'vrect': VX.rect = [act.x, act.y, wx, wy]; need(); break;
     case 'pan':
       S.cam.x -= (px - act.lx) / S.cam.s; S.cam.y += (py - act.ly) / S.cam.s; act.lx = px; act.ly = py; need(true); break;
     case 'cut': cutMove(px, py, wx, wy); break;
@@ -1601,6 +1804,7 @@ function endPointer(e) {
   cv.style.cursor = cursorFor();
   if (a.kind === 'pan') need();
   else if (a.kind === 'bgmove' || a.kind === 'bgresize') markDirty();
+  else if (a.kind === 'vrect') vecRectDone();
   else if (a.kind === 'cut') { act = a; cutUp(px, py, wx, wy); act = null; }
   else if (a.kind === 'paint') { if (a.changed) a.tx.commit(); }
   else if (a.kind === 'brushdel') delFinish(a);
@@ -1654,7 +1858,6 @@ window.addEventListener('keydown', e => {
   if (k === ' ') { spaceDown = true; cv.style.cursor = 'grab'; e.preventDefault(); return; }
   if (k === 'escape') { cutReset(); if (act) abortAct(); return; }
   if (k === 'enter') { if (S.tool === 'poly') polyFinish(); else cutFinish(); return; }
-  if (k === 'f') { fitView(); return; }
   if (k === 'l') { S.labels = !S.labels; need(); return; }
   if (k === '/') { e.preventDefault(); $('#search').focus(); return; }
   if (k === 'delete' || k === 'backspace') { if (S.view === 'prov') deleteSel(); return; }
@@ -1663,8 +1866,8 @@ window.addEventListener('keydown', e => {
   if (k === 'r' && S.view === 'prov') { setTool(S.tool === 'mergepart' ? 'select' : 'mergepart'); return; }
   if (k === 'x' && S.view === 'prov') { setTool(S.tool === 'detach' ? 'select' : 'detach'); return; }
   const map = S.view === 'prov'
-    ? { a: 'select', c: 'cut', e: 'merge', d: 'vertex', w: 'weld', p: 'poly', f: 'fill', h: 'hand' }
-    : S.view === 'bg' ? { b: 'bgmove', h: 'hand' }
+    ? { a: 'select', c: 'cut', e: 'merge', d: 'vertex', w: 'weld', p: 'poly', h: 'hand' }
+    : S.view === 'bg' ? { b: 'bgmove', i: 'vec', h: 'hand' }
     : S.view === 'terrain' ? { t: 'paint', i: 'pipette', h: 'hand', a: 'paint' }
     : { a: 'assign', i: 'pipette', h: 'hand' };
   if (map[k]) { setTool(map[k]); return; }
@@ -1678,7 +1881,7 @@ window.addEventListener('resize', resize);
 const VIEWS = [['prov', 'Provinces'], ['country', 'Pays'], ['region', 'Régions'], ['terrain', 'Terrain'], ['bg', 'Fonds']];
 const TOOLS = {
   prov: [['select', '↖', 'Sélection', 'A'], ['cut', '✂', 'Découpe', 'C'], ['merge', '⊕', 'Fusion', 'E'], ['vertex', '◇', 'Sommets', 'D'], ['weld', '◎', 'Pinceau', 'W'], ['poly', '⬠', 'Polygone', 'P'], ['hand', '✋', 'Main', 'H']],
-  bg: [['bgmove', '⇲', 'Placer', 'B'], ['hand', '✋', 'Main', 'H']],
+  bg: [['bgmove', '⇲', 'Placer', 'B'], ['vec', '✨', 'Vectoriser', 'I'], ['hand', '✋', 'Main', 'H']],
   country: [['assign', '🖌', 'Assigner', 'A'], ['pipette', '💧', 'Pipette', 'I'], ['hand', '✋', 'Main', 'H']],
   region: [['assign', '🖌', 'Assigner', 'A'], ['pipette', '💧', 'Pipette', 'I'], ['hand', '✋', 'Main', 'H']],
   terrain: [['paint', '🖌', 'Stylo', 'T'], ['pipette', '💧', 'Pipette', 'I'], ['hand', '✋', 'Main', 'H']],
@@ -1692,7 +1895,8 @@ const HINTS = {
   'prov:detach':'Clique une partie d’une province multi-parties (île, enclave…) : seule cette partie devient une nouvelle province, les autres restent ensemble. Reclique sur Détacher (ou X) pour quitter.',
   'prov:poly': 'Clique des points (ils s’accrochent aux sommets existants) ; ferme en recliquant le 1er point, double-clic ou Entrée. Dans une terre = trou (lac), dans le vide = nouvelle zone. Type : voir le panneau.',
   'prov:weld': 'Pinceau (action au choix dans le panneau) — Fusionner : clique ou glisse, tous les sommets sous le cercle fusionnent en un seul (voisines incluses). Supprimer : reste cliqué et passe sur les provinces pour les sélectionner (rouge), relâche = suppression. [ ] ou le curseur du panneau = taille. Annuler = Ctrl+Z.',
-  'bg:bgmove': 'Choisis un fond dans le panneau, glisse-le pour le déplacer ; poignées dans les coins = redimensionner (ratio conservé).',
+  'bg:vec': 'Trace un rectangle sur la zone du fond à vectoriser : chaque zone détectée devient une province. Clique une zone pour l’exclure (mer, voisins…), Maj+clic = toutes celles de la même couleur.',
+  'bg:bgmove': 'Choisis un fond dans le panneau, glisse-le pour le déplacer ; poignées dans les coins = redimensionner (ratio conservé ; Maj enfoncé au départ = étirer librement, utile pour une carte en projection différente).',
   'prov:vertex': 'Glisse un sommet (les voisines suivent) ; lâche-le sur un autre sommet (cercle rouge) pour les fusionner. Clique une arête de la province sélectionnée pour ajouter un sommet. Clic droit sur un sommet = supprime.',
   'country:assign': 'Glisse sur les provinces pour les donner au pays actif. Clic droit = retirer.',
   'region:assign': 'Glisse sur les provinces pour les donner à la région active. Clic droit = retirer.',
@@ -1712,7 +1916,7 @@ function syncUI() {
   for (const b of $('#views').children) b.onclick = () => setView(b.dataset.v);
   // outils
   $('#tools').innerHTML = TOOLS[S.view].map(([k, ic, n, key]) => `<button data-t="${k}" class="${S.tool === k ? 'on' : ''}" title="${n} (${key})"><i>${ic}</i><small>${n}</small></button>`).join('')
-    + (S.view === 'prov' ? '<hr><button id="bExplode" title="Éclater en parties (Z)"><i>✺</i><small>Éclater</small></button><button id="bDetach" class="' + (S.tool === 'detach' ? 'on' : '') + '" title="Détacher une seule partie (X)"><i>✂️</i><small>Détacher</small></button><button id="bMergePart" class="' + (S.tool === 'mergepart' ? 'on' : '') + '" title="Fusionner seulement le morceau cliqué (R)"><i>🧩</i><small>Fusion morceau</small></button><button id="bDel" title="Supprimer (Suppr)"><i>🗑</i><small>Suppr.</small></button><button id="bOcean" title="Générer les mers/océans (complément des terres)"><i>🌊</i><small>Océans</small></button><button id="bFill" class="' + (S.tool === 'fill' ? 'on' : '') + '" title="Remplir une zone vide d’un clic (F)"><i>🪣</i><small>Remplir</small></button>' : '');
+    + (S.view === 'prov' ? '<hr><button id="bExplode" title="Éclater en parties (Z)"><i>✺</i><small>Éclater</small></button><button id="bDetach" class="' + (S.tool === 'detach' ? 'on' : '') + '" title="Détacher une seule partie (X)"><i>✂️</i><small>Détacher</small></button><button id="bMergePart" class="' + (S.tool === 'mergepart' ? 'on' : '') + '" title="Fusionner seulement le morceau cliqué (R)"><i>🧩</i><small>Fusion morceau</small></button><button id="bDel" title="Supprimer (Suppr)"><i>🗑</i><small>Suppr.</small></button><button id="bOcean" title="Générer les mers/océans (complément des terres)"><i>🌊</i><small>Océans</small></button><button id="bFill" class="' + (S.tool === 'fill' ? 'on' : '') + '" title="Remplir une zone vide d’un clic"><i>🪣</i><small>Remplir</small></button>' : '');
   for (const b of $('#tools').querySelectorAll('[data-t]')) b.onclick = () => setTool(b.dataset.t);
   if ($('#bExplode')) { $('#bExplode').onclick = explodeSel; $('#bDetach').onclick = () => setTool(S.tool === 'detach' ? 'select' : 'detach'); $('#bMergePart').onclick = () => setTool(S.tool === 'mergepart' ? 'select' : 'mergepart'); $('#bDel').onclick = deleteSel; $('#bOcean').onclick = generateOcean; $('#bFill').onclick = () => setTool(S.tool === 'fill' ? 'select' : 'fill'); }
   $('#bUndo').disabled = !S.undo.length; $('#bRedo').disabled = !S.redo.length;
@@ -1800,6 +2004,8 @@ function renderPanel() {
       };
     }
     const ov = $('#cOv'); if (ov) ov.onchange = e => { S.overlayCountry = e.target.checked; need(); };
+  } else if (S.view === 'bg' && S.tool === 'vec') {
+    renderVecPanel(el);
   } else if (S.view === 'bg') {
     el.innerHTML = `<h3>Fonds de référence</h3>
       ${S.bg.map((l, i) => `<div class="bgrow ${S.bgSel === i ? 'sel' : ''}" data-i="${i}">
