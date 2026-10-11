@@ -1127,7 +1127,7 @@ function addBgFromFile(file) {
    Outil « Vectoriser » (vue Fonds) : un rectangle sur le fond sélectionné → zones détectées (vectorize.js)
    → on exclut ce qu'on ne veut pas (clic) → « Créer » : une province par zone, frontières communes partagées,
    coupées à la côte existante, et elles remplacent les provinces qu'elles recouvrent. */
-const VX = { rect: null, opts: { tol: 24, r: 1, minArea: 0, sliver: 4 }, coast: true, seg: null, excl: new Set(), crop: null, overlay: null };
+const VX = { rect: null, opts: { tol: 24, r: 1, minArea: 0, sliver: 4, smooth: 6 }, coast: true, seg: null, excl: new Set(), crop: null, overlay: null };
 function vecLayer() { const l = S.bg[S.bgSel]; return l && l.img && l.img.complete && l.img.naturalWidth ? l : null; }
 function vecReset() { VX.rect = null; VX.seg = null; VX.excl = new Set(); VX.crop = null; VX.overlay = null; need(); if (S.view === 'bg' && S.tool === 'vec') renderPanel(); }
 function vecDown(wx, wy, e) {
@@ -1226,6 +1226,7 @@ function renderVecPanel(el) {
     <div class="row"><label>Sensibilité</label><input type="range" id="vTol" min="6" max="90" value="${o.tol}"><span class="kv" id="vTolV">${o.tol}</span></div>
     <div class="row"><label>Traits épais</label><input type="range" id="vR" min="1" max="4" value="${o.r}"><span class="kv" id="vRV">${o.r}</span></div>
     <div class="row"><label>Taille mini</label><input type="range" id="vMin" min="0" max="2000" step="10" value="${o.minArea}"><span class="kv" id="vMinV">${o.minArea || 'auto'}</span></div>
+    <div class="row"><label>Lissage</label><input type="range" id="vSm" min="0" max="30" value="${o.smooth}"><span class="kv" id="vSmV">${o.smooth || 'off'}</span></div>
     <div class="row"><label>Anti-éclats</label><input type="range" id="vSl" min="0" max="12" value="${o.sliver}"><span class="kv" id="vSlV">${o.sliver || 'off'}</span></div>
     <div class="row"><label style="width:auto"><input type="checkbox" id="vCoast" ${VX.coast ? 'checked' : ''}> garder la côte existante (couper aux terres)</label></div>
     ${s ? `<div class="row"><button id="vOk" ${kept ? '' : 'disabled'}>Créer ${kept} province${kept > 1 ? 's' : ''}</button></div>
@@ -1237,6 +1238,7 @@ function renderVecPanel(el) {
     e.onchange = rerun;
   };
   bind('vTol', 'tol', 'vTolV', v => v); bind('vR', 'r', 'vRV', v => v); bind('vMin', 'minArea', 'vMinV', v => v || 'auto');
+  $('#vSm').oninput = e => { o.smooth = +e.target.value; $('#vSmV').textContent = o.smooth || 'off'; };
   $('#vSl').oninput = e => { o.sliver = +e.target.value; $('#vSlV').textContent = o.sliver || 'off'; };
   $('#vCoast').onchange = e => { VX.coast = e.target.checked; };
   if ($('#vOk')) $('#vOk').onclick = vecCreate;
@@ -1261,7 +1263,7 @@ async function vecCreate() {
     const pc = window.polygonClipping;
     const keep = new Uint8Array(s.n + 1);
     for (let i = 1; i <= s.n; i++) if (!VX.excl.has(i)) keep[i] = 1;
-    const res = VEC.vectorize(s.labels, s.W, s.H, keep);
+    const res = VEC.vectorize(s.labels, s.W, s.H, keep, { smooth: VX.opts.smooth, eps: 0.5 });
     const kx = (k.wx1 - k.wx0) / k.cw, ky = (k.wy1 - k.wy0) / k.ch;
     const cells = [], bb = [Infinity, Infinity, -Infinity, -Infinity];
     for (const polys of res.values()) {
