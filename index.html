@@ -1686,6 +1686,60 @@ function weldAt(wx, wy, tx) {
   dedupeRings(ids);
   return pos.size;
 }
+
+/* outil Souder : les sommets des voisines qui sont presque (mais pas exactement) sur ceux de la province cliquée
+   sont ramenés pile dessus. Un sommet déplacé entraîne tous ceux qui lui étaient identiques (3e province, etc.). */
+let snapTol = 6;   // pixels écran
+function snapClick(wx, wy) {
+  const p = hitProv(wx, wy);
+  if (!p) { toast('Clique sur une province'); return; }
+  S.sel = p.id; syncUI();
+  const tol = snapTol / S.cam.s, t2 = tol * tol;
+  const key = (x, y) => Math.round(x * 1e8) + ',' + Math.round(y * 1e8);
+  const bb = bbOf(p);
+  const rings = [];                       // anneaux des provinces proches (hors p)
+  for (const q of S.provs.values()) {
+    if (q === p) continue;
+    const b = bbOf(q);
+    if (b[2] < bb[0] - tol || b[0] > bb[2] + tol || b[3] < bb[1] - tol || b[1] > bb[3] + tol) continue;
+    for (const poly of q.polys) for (const ring of poly) rings.push({ q, ring });
+  }
+  const grid = new Map(), cs = tol || 1e-9;
+  const gk = (x, y) => Math.floor(x / cs) + ',' + Math.floor(y / cs);
+  for (const r of rings) for (let i = 0; i < r.ring.length; i += 2) {
+    const k = gk(r.ring[i], r.ring[i + 1]); let a = grid.get(k); if (!a) grid.set(k, a = []); a.push([r.ring[i], r.ring[i + 1]]);
+  }
+  const own = new Set();
+  for (const poly of p.polys) for (const ring of poly) for (let i = 0; i < ring.length; i += 2) own.add(key(ring[i], ring[i + 1]));
+  const target = new Map();               // clé du sommet voisin -> [x, y] cible
+  const best = new Map();
+  for (const poly of p.polys) for (const ring of poly) for (let i = 0; i < ring.length; i += 2) {
+    const x = ring[i], y = ring[i + 1], cx = Math.floor(x / cs), cy = Math.floor(y / cs);
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+      const a = grid.get((cx + dx) + ',' + (cy + dy)); if (!a) continue;
+      for (const [vx, vy] of a) {
+        const k = key(vx, vy); if (own.has(k)) continue;
+        const d = (vx - x) * (vx - x) + (vy - y) * (vy - y);
+        if (d <= t2 && (!best.has(k) || d < best.get(k))) { best.set(k, d); target.set(k, [x, y]); }
+      }
+    }
+  }
+  if (!target.size) { toast('Rien à souder (sommets déjà collés ou trop loin)'); return; }
+  const tx = new Tx(), ids = new Set(); let n = 0;
+  for (const r of rings) {
+    let touched = false;
+    for (let i = 0; i < r.ring.length; i += 2) {
+      const t = target.get(key(r.ring[i], r.ring[i + 1]));
+      if (!t) continue;
+      if (!touched) { tx.touch(r.q); touched = true; }
+      r.ring[i] = t[0]; r.ring[i + 1] = t[1]; n++;
+    }
+    if (touched) ids.add(r.q.id);
+  }
+  dedupeRings(ids);
+  tx.commit(); G.geomDirty = G.asgnDirty = true; need();
+  toast(target.size + ' sommets soudés (' + ids.size + ' provinces voisines) — Ctrl+Z pour annuler');
+}
 function weldDown(wx, wy) {
   if (brush.mode === 'del') { act = { kind: 'brushdel', ids: new Set() }; delCollect(wx, wy); return; }
   act = { kind: 'weld', tx: new Tx(), n: 0, lx: wx, ly: wy };
@@ -1787,6 +1841,7 @@ function toolDown(e, px, py) {
     else if (S.tool === 'mergepart' && !right) mergePartClick(wx, wy);
     else if (S.tool === 'vertex') vertexDown(e, px, py, wx, wy, right);
     else if (S.tool === 'weld' && !right) weldDown(wx, wy);
+    else if (S.tool === 'snap' && !right) snapClick(wx, wy);
   } else if (S.tool === 'pipette') pipetteAt(wx, wy);
   else paintDown(e, px, py, wx, wy, right);
 }
@@ -1927,7 +1982,7 @@ window.addEventListener('keydown', e => {
   if (k === 'r' && S.view === 'prov') { setTool(S.tool === 'mergepart' ? 'select' : 'mergepart'); return; }
   if (k === 'x' && S.view === 'prov') { setTool(S.tool === 'detach' ? 'select' : 'detach'); return; }
   const map = S.view === 'prov'
-    ? { a: 'select', c: 'cut', e: 'merge', d: 'vertex', w: 'weld', p: 'poly', h: 'hand' }
+    ? { a: 'select', c: 'cut', e: 'merge', d: 'vertex', w: 'weld', s: 'snap', p: 'poly', h: 'hand' }
     : S.view === 'bg' ? { b: 'bgmove', i: 'vec', h: 'hand' }
     : S.view === 'terrain' ? { t: 'paint', i: 'pipette', h: 'hand', a: 'paint' }
     : { a: 'assign', i: 'pipette', h: 'hand' };
@@ -1941,7 +1996,7 @@ window.addEventListener('resize', resize);
 /* ===================================================================== interface */
 const VIEWS = [['prov', 'Provinces'], ['country', 'Pays'], ['region', 'Régions'], ['terrain', 'Terrain'], ['bg', 'Fonds']];
 const TOOLS = {
-  prov: [['select', '↖', 'Sélection', 'A'], ['cut', '✂', 'Découpe', 'C'], ['merge', '⊕', 'Fusion', 'E'], ['vertex', '◇', 'Sommets', 'D'], ['weld', '◎', 'Pinceau', 'W'], ['poly', '⬠', 'Polygone', 'P'], ['hand', '✋', 'Main', 'H']],
+  prov: [['select', '↖', 'Sélection', 'A'], ['cut', '✂', 'Découpe', 'C'], ['merge', '⊕', 'Fusion', 'E'], ['vertex', '◇', 'Sommets', 'D'], ['weld', '◎', 'Pinceau', 'W'], ['snap', '🧲', 'Souder', 'S'], ['poly', '⬠', 'Polygone', 'P'], ['hand', '✋', 'Main', 'H']],
   bg: [['bgmove', '⇲', 'Placer', 'B'], ['vec', '✨', 'Vectoriser', 'I'], ['hand', '✋', 'Main', 'H']],
   country: [['assign', '🖌', 'Assigner', 'A'], ['pipette', '💧', 'Pipette', 'I'], ['hand', '✋', 'Main', 'H']],
   region: [['assign', '🖌', 'Assigner', 'A'], ['pipette', '💧', 'Pipette', 'I'], ['hand', '✋', 'Main', 'H']],
@@ -1956,6 +2011,7 @@ const HINTS = {
   'prov:detach':'Clique une partie d’une province multi-parties (île, enclave…) : seule cette partie devient une nouvelle province, les autres restent ensemble. Reclique sur Détacher (ou X) pour quitter.',
   'prov:poly': 'Clique des points (ils s’accrochent aux sommets existants) ; ferme en recliquant le 1er point, double-clic ou Entrée. Dans une terre = trou (lac), dans le vide = nouvelle zone. Type : voir le panneau.',
   'prov:weld': 'Pinceau (action au choix dans le panneau) — Fusionner : clique ou glisse, tous les sommets sous le cercle fusionnent en un seul (voisines incluses). Supprimer : reste cliqué et passe sur les provinces pour les sélectionner (rouge), relâche = suppression. [ ] ou le curseur du panneau = taille. Annuler = Ctrl+Z.',
+  'prov:snap': 'Clique une province : tous les sommets des voisines qui sont presque au même endroit que les siens (tolérance dans le panneau) sont soudés dessus. Ctrl+Z annule.',
   'bg:vec': 'Trace un rectangle sur la zone du fond à vectoriser : chaque zone détectée devient une province. Clique une zone pour l’exclure (mer, voisins…), Maj+clic = toutes celles de la même couleur.',
   'bg:bgmove': 'Choisis un fond dans le panneau, glisse-le pour le déplacer ; poignées dans les coins = redimensionner (ratio conservé ; Maj enfoncé au départ = étirer librement, utile pour une carte en projection différente).',
   'prov:vertex': 'Glisse un sommet (les voisines suivent) ; lâche-le sur un autre sommet (cercle rouge) pour les fusionner. Clique une arête de la province sélectionnée pour ajouter un sommet. Clic droit sur un sommet = supprime.',
@@ -1997,10 +2053,12 @@ function renderPanel() {
     const p = S.provs.get(S.sel);
     const kindHtml = S.tool === 'poly' || S.tool === 'fill'
       ? `<h3>${S.tool === 'fill' ? 'Remplir une zone vide' : 'Polygone libre'}</h3><div class="row"><label>Type</label><select id="pKind">${['sea', 'land', 'lake'].map(k => `<option value="${k}" ${(S.tool === 'fill' ? S.fillKind : S.newKind) === k ? 'selected' : ''}>${{ sea: 'Mer', land: 'Province (terre)', lake: 'Lac' }[k]}</option>`).join('')}</select></div>`
+      : S.tool === 'snap' ? `<h3>Souder</h3><div class="row"><label>Tolérance</label><input type="range" id="sTol" min="1" max="30" value="${snapTol}"><span class="kv" id="sTolV">${snapTol}px</span></div>`
       : S.tool === 'weld' ? `<h3>Pinceau</h3><div class="row"><label>Action</label><select id="wMode"><option value="weld" ${brush.mode === 'weld' ? 'selected' : ''}>Fusionner les sommets</option><option value="del" ${brush.mode === 'del' ? 'selected' : ''}>Supprimer des provinces</option></select></div><div class="row"><label>Rayon</label><input type="range" id="wRad" min="4" max="120" value="${brush.r}"><span class="kv" id="wRadV">${brush.r}px</span></div>` : '';
     const bindKind = () => {
       const k = $('#pKind'); if (k) k.onchange = e => { if (S.tool === 'fill') S.fillKind = e.target.value; else S.newKind = e.target.value; };
       const wm = $('#wMode'); if (wm) wm.onchange = e => { brush.mode = e.target.value; need(); };
+      const st = $('#sTol'); if (st) st.oninput = e => { snapTol = +e.target.value; $('#sTolV').textContent = snapTol + 'px'; };
       const w = $('#wRad'); if (w) w.oninput = e => { brush.r = +e.target.value; $('#wRadV').textContent = brush.r + 'px'; need(); };
     };
     if (!p) { el.innerHTML = kindHtml + `<h3>Province</h3><div class="kv">${S.provs.size} provinces · ${S.countries.size} pays</div><div class="kv">Aucune sélection.</div>`; bindKind(); return; }
