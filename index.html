@@ -923,6 +923,7 @@ function polyFinish() {
       toast('Le polygone se recoupe lui-même'); return;
     }
   }
+  if (S.newKind === 'erase') { eraseInside(ring); return; }
   const bb = C.ringBBox(ring);
   for (const p of S.provs.values()) {
     if (disjoint(bbOf(p), bb)) continue;
@@ -972,6 +973,47 @@ function polyFinish() {
   S.sel = np.id; inval(np);
   tx.commit();
   toast(host ? KIND_NAME[kind] + ' créé (trou découpé dans « ' + host.p.name + ' »)' : KIND_NAME[kind] + ' créé');
+}
+
+/* Polygone en mode « Effacer » : retire des provinces tout ce qui est à l'intérieur de l'anneau
+   (province entièrement dedans = supprimée, à cheval = coupée ; trou si l'anneau est au milieu). */
+function eraseInside(ring) {
+  if (!window.polygonClipping) { toast('Bibliothèque de découpe absente (polygon-clipping.min.js)'); return; }
+  const pc = window.polygonClipping;
+  const toG = poly => poly.map(r => { const a = []; for (let i = 0; i < r.length; i += 2) a.push([r[i], r[i + 1]]); a.push([r[0], r[1]]); return a; });
+  const ringOf = r => {
+    const a = [];
+    for (const [x, y] of r) { const n = a.length; if (n >= 2 && a[n - 2] === x && a[n - 1] === y) continue; a.push(x, y); }
+    if (a.length >= 4 && a[0] === a[a.length - 2] && a[1] === a[a.length - 1]) a.length -= 2;
+    return a.length >= 6 ? a : null;
+  };
+  const R = toG([ring]), bb = C.ringBBox(ring), tx = new Tx();
+  let cutN = 0, delN = 0;
+  try {
+    for (const p of [...S.provs.values()]) {
+      if (disjoint(bbOf(p), bb)) continue;
+      const polys = [];
+      let changed = false;
+      for (const pl of p.polys) {
+        if (disjoint(C.ringBBox(pl[0]), bb)) { polys.push(pl); continue; }
+        const g = toG(pl);
+        if (!pc.intersection(g, R).length) { polys.push(pl); continue; }
+        changed = true;
+        for (const rp of pc.difference(g, R)) {
+          const rings = rp.map(ringOf).filter(Boolean);
+          if (rings.length && ringOf(rp[0]) && C.polysArea([rings]) > 1e-12) polys.push(rings.map((r, i) => C.orientRing(r, i === 0)));
+        }
+      }
+      if (!changed) continue;
+      tx.touch(p);
+      if (!polys.length) { S.provs.delete(p.id); if (S.sel === p.id) S.sel = 0; delN++; }
+      else { p.polys = polys; inval(p); cutN++; }
+    }
+  } catch (err) { toast('Échec de l’effacement : ' + err.message); return; }
+  if (!cutN && !delN) { toast('Rien à effacer dans cette zone'); return; }
+  G.geomDirty = G.asgnDirty = true;
+  tx.commit(); need();
+  toast('Effacé : ' + cutN + ' province(s) coupée(s), ' + delN + ' supprimée(s)');
 }
 
 /* Outil « Remplir » : un clic dans une zone vide (entre des provinces) crée une province qui épouse exactement le vide.
@@ -2056,7 +2098,7 @@ function renderPanel() {
   if (S.view === 'prov') {
     const p = S.provs.get(S.sel);
     const kindHtml = S.tool === 'poly' || S.tool === 'fill'
-      ? `<h3>${S.tool === 'fill' ? 'Remplir une zone vide' : 'Polygone libre'}</h3><div class="row"><label>Type</label><select id="pKind">${['sea', 'land', 'lake'].map(k => `<option value="${k}" ${(S.tool === 'fill' ? S.fillKind : S.newKind) === k ? 'selected' : ''}>${{ sea: 'Mer', land: 'Province (terre)', lake: 'Lac' }[k]}</option>`).join('')}</select></div>`
+      ? `<h3>${S.tool === 'fill' ? 'Remplir une zone vide' : 'Polygone libre'}</h3><div class="row"><label>Type</label><select id="pKind">${(S.tool === 'fill' ? ['sea', 'land', 'lake'] : ['sea', 'land', 'lake', 'erase']).map(k => `<option value="${k}" ${(S.tool === 'fill' ? S.fillKind : S.newKind) === k ? 'selected' : ''}>${{ sea: 'Mer', land: 'Province (terre)', lake: 'Lac', erase: 'Effacer (couper l’intérieur)' }[k]}</option>`).join('')}</select></div>`
       : S.tool === 'snap' ? `<h3>Souder</h3><div class="row"><label>Tolérance</label><input type="range" id="sTol" min="0.1" max="30" step="0.1" value="${snapTol}"><span class="kv" id="sTolV">${snapTol} km</span></div>`
       : S.tool === 'weld' ? `<h3>Pinceau</h3><div class="row"><label>Action</label><select id="wMode"><option value="weld" ${brush.mode === 'weld' ? 'selected' : ''}>Fusionner les sommets</option><option value="del" ${brush.mode === 'del' ? 'selected' : ''}>Supprimer des provinces</option></select></div><div class="row"><label>Rayon</label><input type="range" id="wRad" min="4" max="120" value="${brush.r}"><span class="kv" id="wRadV">${brush.r}px</span></div>` : '';
     const bindKind = () => {
