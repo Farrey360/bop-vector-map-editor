@@ -610,8 +610,8 @@ function draw() {
       ctx.fill('evenodd'); ctx.stroke();
     }
   }
-  if (S.view === 'prov' && S.tool === 'weld' && brush.x !== null) {
-    const del = brush.mode === 'del';
+  if (weldView() && S.tool === 'weld' && brush.x !== null) {
+    const del = brush.mode === 'del' && S.view === 'prov';
     ctx.strokeStyle = del ? '#ff9f1a' : '#ff3b3b'; ctx.lineWidth = 2; ctx.fillStyle = del ? '#ff9f1a22' : '#ff3b3b22';
     ctx.beginPath(); ctx.arc(brush.x, brush.y, brush.r, 0, 6.2832); ctx.fill(); ctx.stroke();
   }
@@ -1652,7 +1652,8 @@ function deleteVertices(refs) {
 
 /* pinceau de fusion : tous les sommets sous le cercle sont fondus en un seul (barycentre).
    Un contour qui s'effondrerait (moins de 3 sommets restants) est épargné. */
-const brush = { r: 18, x: null, y: null, mode: 'weld' };   // rayon en pixels écran ; mode : 'weld' | 'del'
+const brush = { r: 18, x: null, y: null, mode: 'weld' };
+const weldView = () => S.view === 'prov' || S.view === 'country' || S.view === 'region';   // Pays/Régions : fusion seulement   // rayon en pixels écran ; mode : 'weld' | 'del'
 function weldAt(wx, wy, tx) {
   const r = brush.r / S.cam.s, r2 = r * r;
   const key = (x, y) => Math.round(x * 1e8) + ',' + Math.round(y * 1e8);
@@ -1741,7 +1742,7 @@ function snapClick(wx, wy) {
   toast(target.size + ' sommets soudés (' + ids.size + ' provinces voisines) — Ctrl+Z pour annuler');
 }
 function weldDown(wx, wy) {
-  if (brush.mode === 'del') { act = { kind: 'brushdel', ids: new Set() }; delCollect(wx, wy); return; }
+  if (brush.mode === 'del' && S.view === 'prov') { act = { kind: 'brushdel', ids: new Set() }; delCollect(wx, wy); return; }
   act = { kind: 'weld', tx: new Tx(), n: 0, lx: wx, ly: wy };
   act.n += weldAt(wx, wy, act.tx);
 }
@@ -1842,7 +1843,8 @@ function toolDown(e, px, py) {
     else if (S.tool === 'vertex') vertexDown(e, px, py, wx, wy, right);
     else if (S.tool === 'weld' && !right) weldDown(wx, wy);
     else if (S.tool === 'snap' && !right) snapClick(wx, wy);
-  } else if (S.tool === 'pipette') pipetteAt(wx, wy);
+  } else if (S.tool === 'weld') { if (!right) weldDown(wx, wy); }
+  else if (S.tool === 'pipette') pipetteAt(wx, wy);
   else paintDown(e, px, py, wx, wy, right);
 }
 
@@ -1882,7 +1884,7 @@ cv.addEventListener('pointermove', e => {
     }
     return;
   }
-  if (S.tool === 'weld' && S.view === 'prov') { brush.x = px; brush.y = py; if (!act) need(); }
+  if (S.tool === 'weld' && weldView()) { brush.x = px; brush.y = py; if (!act) need(); }
   if (!act) {
     if (S.tool === 'cut' && S.view === 'prov' && cut.pts.length) { cut.hover = [wx, wy]; need(); }
     else if (S.tool === 'poly' && S.view === 'prov' && pdraw.pts.length) { pdraw.hover = snapVertex(wx, wy) || [wx, wy]; need(); }
@@ -1985,9 +1987,9 @@ window.addEventListener('keydown', e => {
     ? { a: 'select', c: 'cut', e: 'merge', d: 'vertex', w: 'weld', s: 'snap', p: 'poly', h: 'hand' }
     : S.view === 'bg' ? { b: 'bgmove', i: 'vec', h: 'hand' }
     : S.view === 'terrain' ? { t: 'paint', i: 'pipette', h: 'hand', a: 'paint' }
-    : { a: 'assign', i: 'pipette', h: 'hand' };
+    : { a: 'assign', w: 'weld', i: 'pipette', h: 'hand' };
   if (map[k]) { setTool(map[k]); return; }
-  if (S.view === 'prov' && S.tool === 'weld' && (k === '[' || k === ']')) { brush.r = Math.max(4, Math.min(120, Math.round(brush.r * (k === ']' ? 1.25 : 0.8)))); syncUI(); need(); return; }
+  if (weldView() && S.tool === 'weld' && (k === '[' || k === ']')) { brush.r = Math.max(4, Math.min(120, Math.round(brush.r * (k === ']' ? 1.25 : 0.8)))); syncUI(); need(); return; }
   if (S.view === 'terrain' && (k === '[' || k === ']')) { S.pen = (S.pen + (k === ']' ? 1 : TERRAINS.length - 1)) % TERRAINS.length; syncUI(); }
 });
 window.addEventListener('keyup', e => { if (e.key === ' ') { spaceDown = false; cv.style.cursor = cursorFor(); } });
@@ -1998,8 +2000,8 @@ const VIEWS = [['prov', 'Provinces'], ['country', 'Pays'], ['region', 'Régions'
 const TOOLS = {
   prov: [['select', '↖', 'Sélection', 'A'], ['cut', '✂', 'Découpe', 'C'], ['merge', '⊕', 'Fusion', 'E'], ['vertex', '◇', 'Sommets', 'D'], ['weld', '◎', 'Pinceau', 'W'], ['snap', '🧲', 'Souder', 'S'], ['poly', '⬠', 'Polygone', 'P'], ['hand', '✋', 'Main', 'H']],
   bg: [['bgmove', '⇲', 'Placer', 'B'], ['vec', '✨', 'Vectoriser', 'I'], ['hand', '✋', 'Main', 'H']],
-  country: [['assign', '🖌', 'Assigner', 'A'], ['pipette', '💧', 'Pipette', 'I'], ['hand', '✋', 'Main', 'H']],
-  region: [['assign', '🖌', 'Assigner', 'A'], ['pipette', '💧', 'Pipette', 'I'], ['hand', '✋', 'Main', 'H']],
+  country: [['assign', '🖌', 'Assigner', 'A'], ['weld', '◎', 'Pinceau', 'W'], ['pipette', '💧', 'Pipette', 'I'], ['hand', '✋', 'Main', 'H']],
+  region: [['assign', '🖌', 'Assigner', 'A'], ['weld', '◎', 'Pinceau', 'W'], ['pipette', '💧', 'Pipette', 'I'], ['hand', '✋', 'Main', 'H']],
   terrain: [['paint', '🖌', 'Stylo', 'T'], ['pipette', '💧', 'Pipette', 'I'], ['hand', '✋', 'Main', 'H']],
 };
 const HINTS = {
@@ -2017,6 +2019,8 @@ const HINTS = {
   'prov:vertex': 'Glisse un sommet (les voisines suivent) ; lâche-le sur un autre sommet (cercle rouge) pour les fusionner. Clique une arête de la province sélectionnée pour ajouter un sommet. Clic droit sur un sommet = supprime.',
   'country:assign': 'Glisse sur les provinces pour les donner au pays actif. Clic droit = retirer.',
   'region:assign': 'Glisse sur les provinces pour les donner à la région active. Clic droit = retirer.',
+  'country:weld': 'Pinceau : clique ou glisse, tous les sommets sous le cercle fusionnent en un seul (voisines incluses). [ ] ou le curseur du panneau = taille. Annuler = Ctrl+Z.',
+  'region:weld': 'Pinceau : clique ou glisse, tous les sommets sous le cercle fusionnent en un seul (voisines incluses). [ ] ou le curseur du panneau = taille. Annuler = Ctrl+Z.',
   'terrain:paint': 'Glisse sur les provinces pour leur appliquer le terrain choisi. Clic droit = non défini. [ ] change de terrain.',
 };
 
@@ -2086,7 +2090,8 @@ function renderPanel() {
       <div class="kv">${count} province${count > 1 ? 's' : ''}</div>
       <div class="row"><button id="cGo">Voir</button><button id="cRen" title="Renomme ses provinces « Nom 1, Nom 2… » du nord au sud">Nommer les provinces</button></div>
       <div class="row"><button id="cDel" class="danger">Supprimer ${isC ? 'ce pays' : 'cette région'}</button></div>` : ''}
-      ${isC ? '' : `<div class="row"><label style="width:auto"><input type="checkbox" id="cOv" ${S.overlayCountry ? 'checked' : ''}> pays en transparence</label></div>`}`;
+      ${isC ? '' : `<div class="row"><label style="width:auto"><input type="checkbox" id="cOv" ${S.overlayCountry ? 'checked' : ''}> pays en transparence</label></div>`}
+      ${S.tool === 'weld' ? `<h3>Pinceau (fusion des sommets)</h3><div class="row"><label>Rayon</label><input type="range" id="wRad" min="4" max="120" value="${brush.r}"><span class="kv" id="wRadV">${brush.r}px</span></div>` : ''}`;
     $('#cSel').onchange = e => { if (isC) S.actC = +e.target.value; else S.actR = +e.target.value; syncUI(); };
     const step = d => {
       const list = byName(map); if (!list.length) return;
@@ -2123,6 +2128,7 @@ function renderPanel() {
       };
     }
     const ov = $('#cOv'); if (ov) ov.onchange = e => { S.overlayCountry = e.target.checked; need(); };
+    const w = $('#wRad'); if (w) w.oninput = e => { brush.r = +e.target.value; $('#wRadV').textContent = brush.r + 'px'; need(); };
   } else if (S.view === 'bg' && S.tool === 'vec') {
     renderVecPanel(el);
   } else if (S.view === 'bg') {
