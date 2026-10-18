@@ -1689,12 +1689,12 @@ function weldAt(wx, wy, tx) {
 
 /* outil Souder : les sommets des voisines qui sont presque (mais pas exactement) sur ceux de la province cliquée
    sont ramenés pile dessus. Un sommet déplacé entraîne tous ceux qui lui étaient identiques (3e province, etc.). */
-let snapTol = 6;   // pixels écran
+let snapTol = 2;   // km sur la carte (ne dépend plus du zoom)
 function snapClick(wx, wy) {
   const p = hitProv(wx, wy);
   if (!p) { toast('Clique sur une province'); return; }
   S.sel = p.id; syncUI();
-  const tol = snapTol / S.cam.s, t2 = tol * tol;
+  const tol = snapTol / 111.32, t2 = tol * tol;   // km -> degrés
   const key = (x, y) => Math.round(x * 1e8) + ',' + Math.round(y * 1e8);
   const bb = bbOf(p);
   const rings = [];                       // anneaux des provinces proches (hors p)
@@ -2053,12 +2053,12 @@ function renderPanel() {
     const p = S.provs.get(S.sel);
     const kindHtml = S.tool === 'poly' || S.tool === 'fill'
       ? `<h3>${S.tool === 'fill' ? 'Remplir une zone vide' : 'Polygone libre'}</h3><div class="row"><label>Type</label><select id="pKind">${['sea', 'land', 'lake'].map(k => `<option value="${k}" ${(S.tool === 'fill' ? S.fillKind : S.newKind) === k ? 'selected' : ''}>${{ sea: 'Mer', land: 'Province (terre)', lake: 'Lac' }[k]}</option>`).join('')}</select></div>`
-      : S.tool === 'snap' ? `<h3>Souder</h3><div class="row"><label>Tolérance</label><input type="range" id="sTol" min="1" max="30" value="${snapTol}"><span class="kv" id="sTolV">${snapTol}px</span></div>`
+      : S.tool === 'snap' ? `<h3>Souder</h3><div class="row"><label>Tolérance</label><input type="range" id="sTol" min="0.1" max="30" step="0.1" value="${snapTol}"><span class="kv" id="sTolV">${snapTol} km</span></div>`
       : S.tool === 'weld' ? `<h3>Pinceau</h3><div class="row"><label>Action</label><select id="wMode"><option value="weld" ${brush.mode === 'weld' ? 'selected' : ''}>Fusionner les sommets</option><option value="del" ${brush.mode === 'del' ? 'selected' : ''}>Supprimer des provinces</option></select></div><div class="row"><label>Rayon</label><input type="range" id="wRad" min="4" max="120" value="${brush.r}"><span class="kv" id="wRadV">${brush.r}px</span></div>` : '';
     const bindKind = () => {
       const k = $('#pKind'); if (k) k.onchange = e => { if (S.tool === 'fill') S.fillKind = e.target.value; else S.newKind = e.target.value; };
       const wm = $('#wMode'); if (wm) wm.onchange = e => { brush.mode = e.target.value; need(); };
-      const st = $('#sTol'); if (st) st.oninput = e => { snapTol = +e.target.value; $('#sTolV').textContent = snapTol + 'px'; };
+      const st = $('#sTol'); if (st) st.oninput = e => { snapTol = +e.target.value; $('#sTolV').textContent = snapTol + ' km'; };
       const w = $('#wRad'); if (w) w.oninput = e => { brush.r = +e.target.value; $('#wRadV').textContent = brush.r + 'px'; need(); };
     };
     if (!p) { el.innerHTML = kindHtml + `<h3>Province</h3><div class="kv">${S.provs.size} provinces · ${S.countries.size} pays</div><div class="kv">Aucune sélection.</div>`; bindKind(); return; }
