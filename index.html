@@ -1730,6 +1730,50 @@ function weldAt(wx, wy, tx) {
   return pos.size;
 }
 
+/* pinceau « Supprimer des sommets » : les sommets sous le cercle sont retirés, les voisins se relient en ligne droite.
+   Un sommet n'est retiré que si tous les contours qui le portent ont les mêmes voisins (milieu d'une frontière
+   partagée ou d'une côte) : les jonctions de 3 provinces et les bouts de frontière restent, donc ni trou ni chevauchement.
+   Un contour garde toujours au moins 3 sommets. */
+function vdelAt(wx, wy, tx) {
+  const r = brush.r / S.cam.s, r2 = r * r;
+  const key = (x, y) => Math.round(x * 1e8) + ',' + Math.round(y * 1e8);
+  const rings = [];
+  for (const p of S.provs.values()) {
+    const bb = bbOf(p);
+    if (wx < bb[0] - r || wx > bb[2] + r || wy < bb[1] - r || wy > bb[3] + r) continue;
+    for (const poly of p.polys) for (const ring of poly) {
+      for (let i = 0; i < ring.length; i += 2) { const dx = ring[i] - wx, dy = ring[i + 1] - wy; if (dx * dx + dy * dy <= r2) { rings.push({ p, ring }); break; } }
+    }
+  }
+  const cand = new Map();   // clé -> [x, y]
+  for (const h of rings) for (let i = 0; i < h.ring.length; i += 2) {
+    const dx = h.ring[i] - wx, dy = h.ring[i + 1] - wy;
+    if (dx * dx + dy * dy <= r2) cand.set(key(h.ring[i], h.ring[i + 1]), [h.ring[i], h.ring[i + 1]]);
+  }
+  const ids = new Set(); let n = 0;
+  for (const [k] of cand) {
+    const at = [];   // { h, i, nb } pour chaque contour qui porte ce sommet
+    let ok = true, sig = null;
+    for (const h of rings) {
+      const L = h.ring.length;
+      for (let i = 0; i < L; i += 2) {
+        if (key(h.ring[i], h.ring[i + 1]) !== k) continue;
+        if (L <= 6) { ok = false; break; }
+        const a = (i - 2 + L) % L, b = (i + 2) % L;
+        const nb = [key(h.ring[a], h.ring[a + 1]), key(h.ring[b], h.ring[b + 1])].sort().join('|');
+        if (sig === null) sig = nb; else if (nb !== sig) { ok = false; break; }
+        at.push({ h, i });
+      }
+      if (!ok) break;
+    }
+    if (!ok || !at.length) continue;
+    for (const { h, i } of at.sort((u, v) => v.i - u.i)) { tx.touch(h.p); h.ring.splice(i, 2); ids.add(h.p.id); }
+    n++;
+  }
+  for (const id of ids) inval(S.provs.get(id));
+  return n;
+}
+
 /* outil Souder : les sommets des voisines qui sont presque (mais pas exactement) sur ceux de la province cliquée
    sont ramenés pile dessus. Un sommet déplacé entraîne tous ceux qui lui étaient identiques (3e province, etc.). */
 let snapTol = 2;   // km sur la carte (ne dépend plus du zoom)
@@ -1785,8 +1829,8 @@ function snapClick(wx, wy) {
 }
 function weldDown(wx, wy) {
   if (brush.mode === 'del' && S.view === 'prov') { act = { kind: 'brushdel', ids: new Set() }; delCollect(wx, wy); return; }
-  act = { kind: 'weld', tx: new Tx(), n: 0, lx: wx, ly: wy };
-  act.n += weldAt(wx, wy, act.tx);
+  act = { kind: 'weld', tx: new Tx(), n: 0, lx: wx, ly: wy, vdel: brush.mode === 'vdel' };
+  act.n += act.vdel ? vdelAt(wx, wy, act.tx) : weldAt(wx, wy, act.tx);
 }
 
 /* mode « Supprimer » : en restant cliqué, toutes les provinces touchées par le cercle sont sélectionnées ;
@@ -1828,7 +1872,7 @@ function delFinish(a) {
 function weldMove(wx, wy) {
   if (Math.hypot(wx - act.lx, wy - act.ly) * S.cam.s < brush.r * 0.4) return;
   act.lx = wx; act.ly = wy;
-  act.n += weldAt(wx, wy, act.tx);
+  act.n += act.vdel ? vdelAt(wx, wy, act.tx) : weldAt(wx, wy, act.tx);
 }
 
 /* ===================================================================== outils : assignation / pipette / terrain */
@@ -1968,7 +2012,7 @@ function endPointer(e) {
   else if (a.kind === 'cut') { act = a; cutUp(px, py, wx, wy); act = null; }
   else if (a.kind === 'paint') { if (a.changed) a.tx.commit(); }
   else if (a.kind === 'brushdel') delFinish(a);
-  else if (a.kind === 'weld') { if (a.tx.commit()) toast(a.n + ' sommets fusionnés'); else toast('Rien à fusionner sous le pinceau'); G.geomDirty = G.asgnDirty = true; need(); }
+  else if (a.kind === 'weld') { if (a.tx.commit()) toast(a.n + (a.vdel ? ' sommets supprimés' : ' sommets fusionnés')); else toast(a.vdel ? 'Aucun sommet supprimable sous le pinceau' : 'Rien à fusionner sous le pinceau'); G.geomDirty = G.asgnDirty = true; need(); }
   else if (a.kind === 'vdrag') {
     G.dragB = null; G.geomDirty = G.asgnDirty = true;
     if (a.snap) { dedupeRings(a.provIds); toast('Sommets fusionnés'); }
@@ -2054,15 +2098,15 @@ const HINTS = {
   'prov:mergepart': 'Sélectionne une province (ou clique-la), puis clique le morceau voisin à absorber : seul ce morceau passe dans la première, le reste de sa province ne bouge pas. Reclique sur Fusion morceau (ou R) pour quitter.',
   'prov:detach':'Clique une partie d’une province multi-parties (île, enclave…) : seule cette partie devient une nouvelle province, les autres restent ensemble. Reclique sur Détacher (ou X) pour quitter.',
   'prov:poly': 'Clique des points (ils s’accrochent aux sommets existants) ; ferme en recliquant le 1er point, double-clic ou Entrée. Dans une terre = trou (lac), dans le vide = nouvelle zone. Type : voir le panneau.',
-  'prov:weld': 'Pinceau (action au choix dans le panneau) — Fusionner : clique ou glisse, tous les sommets sous le cercle fusionnent en un seul (voisines incluses). Supprimer : reste cliqué et passe sur les provinces pour les sélectionner (rouge), relâche = suppression. [ ] ou le curseur du panneau = taille. Annuler = Ctrl+Z.',
+  'prov:weld': 'Pinceau (action au choix dans le panneau) — Fusionner : clique ou glisse, tous les sommets sous le cercle fusionnent en un seul (voisines incluses). Supprimer des sommets : clique ou glisse, les sommets sous le cercle disparaissent (frontières partagées gardées collées, jonctions de 3 provinces conservées). Supprimer des provinces : reste cliqué et passe sur les provinces pour les sélectionner (rouge), relâche = suppression. [ ] ou le curseur du panneau = taille. Annuler = Ctrl+Z.',
   'prov:snap': 'Clique une province : tous les sommets des voisines qui sont presque au même endroit que les siens (tolérance dans le panneau) sont soudés dessus. Ctrl+Z annule.',
   'bg:vec': 'Trace un rectangle sur la zone du fond à vectoriser : chaque zone détectée devient une province. Clique une zone pour l’exclure (mer, voisins…), Maj+clic = toutes celles de la même couleur.',
   'bg:bgmove': 'Choisis un fond dans le panneau, glisse-le pour le déplacer ; poignées dans les coins = redimensionner (ratio conservé ; Maj enfoncé au départ = étirer librement, utile pour une carte en projection différente).',
   'prov:vertex': 'Glisse un sommet (les voisines suivent) ; lâche-le sur un autre sommet (cercle rouge) pour les fusionner. Clique une arête de la province sélectionnée pour ajouter un sommet. Clic droit sur un sommet = supprime.',
   'country:assign': 'Glisse sur les provinces pour les donner au pays actif. Clic droit = retirer.',
   'region:assign': 'Glisse sur les provinces pour les donner à la région active. Clic droit = retirer.',
-  'country:weld': 'Pinceau : clique ou glisse, tous les sommets sous le cercle fusionnent en un seul (voisines incluses). [ ] ou le curseur du panneau = taille. Annuler = Ctrl+Z.',
-  'region:weld': 'Pinceau : clique ou glisse, tous les sommets sous le cercle fusionnent en un seul (voisines incluses). [ ] ou le curseur du panneau = taille. Annuler = Ctrl+Z.',
+  'country:weld': 'Pinceau : clique ou glisse. Fusionner = tous les sommets sous le cercle fusionnent en un seul (voisines incluses). Supprimer des sommets = les sommets sous le cercle disparaissent (jonctions conservées). [ ] ou le curseur du panneau = taille. Annuler = Ctrl+Z.',
+  'region:weld': 'Pinceau : clique ou glisse. Fusionner = tous les sommets sous le cercle fusionnent en un seul (voisines incluses). Supprimer des sommets = les sommets sous le cercle disparaissent (jonctions conservées). [ ] ou le curseur du panneau = taille. Annuler = Ctrl+Z.',
   'terrain:paint': 'Glisse sur les provinces pour leur appliquer le terrain choisi. Clic droit = non défini. [ ] change de terrain.',
 };
 
@@ -2100,7 +2144,7 @@ function renderPanel() {
     const kindHtml = S.tool === 'poly' || S.tool === 'fill'
       ? `<h3>${S.tool === 'fill' ? 'Remplir une zone vide' : 'Polygone libre'}</h3><div class="row"><label>Type</label><select id="pKind">${(S.tool === 'fill' ? ['sea', 'land', 'lake'] : ['sea', 'land', 'lake', 'erase']).map(k => `<option value="${k}" ${(S.tool === 'fill' ? S.fillKind : S.newKind) === k ? 'selected' : ''}>${{ sea: 'Mer', land: 'Province (terre)', lake: 'Lac', erase: 'Effacer (couper l’intérieur)' }[k]}</option>`).join('')}</select></div>`
       : S.tool === 'snap' ? `<h3>Souder</h3><div class="row"><label>Tolérance</label><input type="range" id="sTol" min="0.1" max="30" step="0.1" value="${snapTol}"><span class="kv" id="sTolV">${snapTol} km</span></div>`
-      : S.tool === 'weld' ? `<h3>Pinceau</h3><div class="row"><label>Action</label><select id="wMode"><option value="weld" ${brush.mode === 'weld' ? 'selected' : ''}>Fusionner les sommets</option><option value="del" ${brush.mode === 'del' ? 'selected' : ''}>Supprimer des provinces</option></select></div><div class="row"><label>Rayon</label><input type="range" id="wRad" min="4" max="120" value="${brush.r}"><span class="kv" id="wRadV">${brush.r}px</span></div>` : '';
+      : S.tool === 'weld' ? `<h3>Pinceau</h3><div class="row"><label>Action</label><select id="wMode"><option value="weld" ${brush.mode === 'weld' ? 'selected' : ''}>Fusionner les sommets</option><option value="vdel" ${brush.mode === 'vdel' ? 'selected' : ''}>Supprimer des sommets</option><option value="del" ${brush.mode === 'del' ? 'selected' : ''}>Supprimer des provinces</option></select></div><div class="row"><label>Rayon</label><input type="range" id="wRad" min="4" max="120" value="${brush.r}"><span class="kv" id="wRadV">${brush.r}px</span></div>` : '';
     const bindKind = () => {
       const k = $('#pKind'); if (k) k.onchange = e => { if (S.tool === 'fill') S.fillKind = e.target.value; else S.newKind = e.target.value; };
       const wm = $('#wMode'); if (wm) wm.onchange = e => { brush.mode = e.target.value; need(); };
@@ -2133,7 +2177,7 @@ function renderPanel() {
       <div class="row"><button id="cGo">Voir</button><button id="cRen" title="Renomme ses provinces « Nom 1, Nom 2… » du nord au sud">Nommer les provinces</button></div>
       <div class="row"><button id="cDel" class="danger">Supprimer ${isC ? 'ce pays' : 'cette région'}</button></div>` : ''}
       ${isC ? '' : `<div class="row"><label style="width:auto"><input type="checkbox" id="cOv" ${S.overlayCountry ? 'checked' : ''}> pays en transparence</label></div>`}
-      ${S.tool === 'weld' ? `<h3>Pinceau (fusion des sommets)</h3><div class="row"><label>Rayon</label><input type="range" id="wRad" min="4" max="120" value="${brush.r}"><span class="kv" id="wRadV">${brush.r}px</span></div>` : ''}`;
+      ${S.tool === 'weld' ? `<h3>Pinceau</h3><div class="row"><label>Action</label><select id="wMode"><option value="weld" ${brush.mode !== 'vdel' ? 'selected' : ''}>Fusionner les sommets</option><option value="vdel" ${brush.mode === 'vdel' ? 'selected' : ''}>Supprimer des sommets</option></select></div><div class="row"><label>Rayon</label><input type="range" id="wRad" min="4" max="120" value="${brush.r}"><span class="kv" id="wRadV">${brush.r}px</span></div>` : ''}`;
     $('#cSel').onchange = e => { if (isC) S.actC = +e.target.value; else S.actR = +e.target.value; syncUI(); };
     const step = d => {
       const list = byName(map); if (!list.length) return;
@@ -2170,6 +2214,7 @@ function renderPanel() {
       };
     }
     const ov = $('#cOv'); if (ov) ov.onchange = e => { S.overlayCountry = e.target.checked; need(); };
+    const wm = $('#wMode'); if (wm) wm.onchange = e => { brush.mode = e.target.value; need(); };
     const w = $('#wRad'); if (w) w.oninput = e => { brush.r = +e.target.value; $('#wRadV').textContent = brush.r + 'px'; need(); };
   } else if (S.view === 'bg' && S.tool === 'vec') {
     renderVecPanel(el);
