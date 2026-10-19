@@ -146,6 +146,7 @@ input[type=color]{width:38px;height:32px;padding:2px;background:#0f1117;border:1
 <script src="ne50.js"></script>
 <script src="polygon-clipping.min.js"></script>
 <script src="vectorize.js"></script>
+<script src="hoi4_straits.js"></script>
 <script>
 'use strict';
 const C = BopCore;
@@ -170,6 +171,7 @@ const S = {
   overlayCountry: true, labels: false, provAlpha: 1, newKind: 'sea', fillKind: 'land',
   bg: [], bgSel: -1,
   cam: { x: 0, y: 15, s: 3 }, undo: [], redo: [], dirty: false,
+  straits: [], nextStrait: 1, showStraits: true, straitsFromHoi4: false,   // détroits du jeu (outil Détroits)
 };
 const G = { edges: [], geomDirty: true, asgnDirty: true, bProv: null, bCountry: null, bRegion: null, dragB: null };
 
@@ -265,6 +267,7 @@ class Tx {
 }
 function applyEnts(ents, useAfter) {
   for (const e of ents) {
+    if (e.straits) { S.straits = JSON.parse(JSON.stringify(useAfter ? e.after : e.before)); if (!straitById(strait.sel)) strait.sel = 0; continue; }
     const src = useAfter ? e.after : e.before;
     if (!src) S.provs.delete(e.id); else S.provs.set(e.id, C.cloneProv(src));
   }
@@ -282,6 +285,8 @@ function blankState() {
   S.sel = S.actC = S.actR = 0; S.undo = []; S.redo = [];
   S.bg = []; S.bgSel = -1; S.provAlpha = 1;
   S.cloudName = ''; S.cloudSha = ''; S.cloudConflict = false;
+  S.straits = []; S.nextStrait = 1; S.showStraits = true; S.straitsFromHoi4 = false;
+  if (strait) { strait.sel = 0; strait.a = null; }
   G.geomDirty = G.asgnDirty = true;
 }
 const cleanRing = r => {
@@ -338,6 +343,7 @@ function serialize() {
   return {
     format: 1, name: S.name, nextProv: S.nextProv, nextCountry: S.nextCountry, nextRegion: S.nextRegion,
     provAlpha: S.provAlpha, cloudName: S.cloudName, cloudSha: S.cloudSha,
+    straits: S.straits, nextStrait: S.nextStrait, showStraits: S.showStraits, straitsFromHoi4: S.straitsFromHoi4,
     bg: S.bg.map(l => ({ name: l.name, src: l.src, x0: l.x0, y0: l.y0, x1: l.x1, y1: l.y1, opacity: l.opacity, visible: l.visible })),
     countries: [...S.countries.values()], regions: [...S.regions.values()],
     provinces: [...S.provs.values()].map(p => ({
@@ -355,6 +361,9 @@ function deserialize(d) {
   S.nextProv = d.nextProv || 1; S.nextCountry = d.nextCountry || 1; S.nextRegion = d.nextRegion || 1;
   S.provAlpha = d.provAlpha || 1;
   S.cloudName = d.cloudName || ''; S.cloudSha = d.cloudSha || '';
+  S.straits = (d.straits || []).map(st => ({ ...st, a: st.a.slice(), b: st.b.slice() }));
+  S.nextStrait = d.nextStrait || S.straits.reduce((m, st) => Math.max(m, st.id + 1), 1);
+  S.showStraits = d.showStraits !== false; S.straitsFromHoi4 = !!d.straitsFromHoi4;
   for (const l of d.bg || []) addBgLayer(l);
 }
 
@@ -532,6 +541,8 @@ function draw() {
     ctx.strokeStyle = '#ffe14d'; ctx.lineWidth = 2.4 * px; ctx.stroke(pathOf(sp));
   }
 
+  straitDraw(ctx, px);
+
   // prévisualisation de découpe
   if (cut.pts.length || cut.free) {
     const pts = cut.pts.slice();
@@ -587,6 +598,7 @@ function draw() {
       ctx.fillRect(sx - 3, sy - 3, 6, 6); ctx.strokeRect(sx - 3, sy - 3, 6, 6); n++;
     }
   }
+  straitDrawScreen(ctx);
   if (act && act.kind === 'vdrag' && act.snap) {
     const [sx, sy] = w2s(act.snap[0], act.snap[1]);
     ctx.strokeStyle = '#ff3b3b'; ctx.lineWidth = 2;
@@ -1911,6 +1923,225 @@ function pipetteAt(wx, wy) {
   syncUI();
 }
 
+/* ===================================================================== détroits (adjacences du jeu, façon HOI4) */
+// Un détroit relie deux provinces de terre qui ne se touchent pas : les armées passent sans bateau. Dessin comme HOI4
+// (map/terrain/strait.dds : tirets rouge sombre 46,4,5 à 75 %, liseré à 50 %, 3/4 plein). Points en [lon, lat] : le jeu retrouve
+// lui-même les provinces dessous (et la mer traversée = milieu du trait). Types : sea (détroit), river / river_large (rivière
+// entre deux voisines : pénalité d'attaque), impassable (coupe deux voisines).
+const STRAIT_TYPES = { sea: 'Détroit (sans bateau)', river: 'Rivière', river_large: 'Grande rivière', impassable: 'Infranchissable' };
+var strait = { a: null, hover: null, sel: 0 };   // a = 1er clic en attente du 2e
+const isLandProv = p => !!p && (p.terrain === NOT_SET || TERRAINS[p.terrain][2] === 'land');
+const straitById = id => S.straits.find(s => s.id === id);
+
+// Modification annulable de la liste des détroits (une entrée d'annulation à part, sans toucher aux provinces).
+function straitTx(fn, before) {
+  const b = before || JSON.stringify(S.straits);
+  fn();
+  const a = JSON.stringify(S.straits);
+  if (a === b) return false;
+  S.undo.push([{ straits: true, before: JSON.parse(b), after: JSON.parse(a) }]);
+  if (S.undo.length > 60) S.undo.shift();
+  S.redo.length = 0; markDirty(); syncUI(); need();
+  return true;
+}
+
+// Ce que le jeu verra : provinces sous chaque bout, problèmes éventuels.
+function straitInfo(st) {
+  const A = hitProv(st.a[0], st.a[1]), B = hitProv(st.b[0], st.b[1]);
+  let warn = '';
+  if (!isLandProv(A) || !isLandProv(B)) warn = 'un bout n’est pas sur une province de terre';
+  else if (A === B) warn = 'les deux bouts sont dans la même province (lien inutile ?)';
+  if (warn) return { A, B, warn, same: !!A && A === B };
+  return { A, B, warn };
+}
+
+// Point sur la terre : s'il tombe dans l'eau, la terre la plus proche (anneaux jusqu'à 0,4°, comme le jeu au chargement).
+function snapLand(pt, avoid) {
+  const ok = q => isLandProv(q) && q !== avoid;
+  if (ok(hitProv(pt[0], pt[1]))) return pt;
+  for (let r = 0.01; r <= 0.401; r += 0.01)
+    for (let k = 0; k < 24; k++) {
+      const a = k * Math.PI / 12, q = [pt[0] + r * Math.cos(a) / Math.max(0.2, Math.cos(pt[1] * Math.PI / 180)), pt[1] + r * Math.sin(a)];
+      if (ok(hitProv(q[0], q[1]))) return q;
+    }
+  return pt;
+}
+
+function straitHit(px, py) {
+  let best = 0, bd = 8;
+  for (const st of S.straits) {
+    const [ax, ay] = w2s(st.a[0], st.a[1]), [bx, by] = w2s(st.b[0], st.b[1]);
+    const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy || 1;
+    const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2));
+    const d = Math.hypot(px - ax - t * dx, py - ay - t * dy);
+    if (d < bd) { bd = d; best = st.id; }
+  }
+  return best;
+}
+
+function straitDown(e, px, py, wx, wy, right) {
+  if (right) { if (strait.a) strait.a = null; else strait.sel = 0; syncUI(); need(); return; }
+  const sel = straitById(strait.sel);
+  if (sel && !strait.a) {
+    for (const end of ['a', 'b']) {
+      const [sx, sy] = w2s(sel[end][0], sel[end][1]);
+      if (Math.hypot(px - sx, py - sy) < 9) { act = { kind: 'sdrag', st: sel, end, before: JSON.stringify(S.straits) }; return; }
+    }
+  }
+  if (strait.a) {
+    const A = hitProv(strait.a[0], strait.a[1]), B = hitProv(wx, wy);
+    if (!isLandProv(B)) { toast('Clique une province de terre pour l’autre rive'); return; }
+    if (A === B) { toast('Même province : clique l’autre rive'); return; }
+    const a = strait.a; strait.a = null;
+    straitTx(() => {
+      const st = { id: S.nextStrait++, a, b: [wx, wy], type: 'sea', name: '', rule: '' };
+      S.straits.push(st); strait.sel = st.id;
+    });
+    toast('Détroit créé : ' + A.name + ' ↔ ' + B.name);
+    return;
+  }
+  const hit = straitHit(px, py);
+  if (hit) { strait.sel = hit; syncUI(); need(); return; }
+  const p = hitProv(wx, wy);
+  if (isLandProv(p)) { strait.a = [wx, wy]; strait.hover = [wx, wy]; strait.sel = 0; syncUI(); need(); }
+  else { strait.sel = 0; syncUI(); need(); }
+}
+
+function straitDelete() {
+  if (!strait.sel) return;
+  straitTx(() => { S.straits = S.straits.filter(s => s.id !== strait.sel); strait.sel = 0; });
+}
+
+// Détroits de HOI4 (hoi4_straits.js) : ajoute ceux qui n'existent pas déjà (mêmes bouts à ~10 km près). Ensuite, c'est la liste
+// de l'éditeur qui fait foi dans le jeu (export : replace_hoi4_straits).
+function straitImportHoi4() {
+  const list = window.HOI4_STRAITS || [];
+  const near = (p, q) => Math.abs(p[0] - q[0]) < 0.1 && Math.abs(p[1] - q[1]) < 0.1;
+  let n = 0;
+  straitTx(() => {
+    const done = new Set(S.straits.map(s => s.h));   // liens de HOI4 déjà présents (numéro dans HOI4_STRAITS)
+    for (let i = 0; i < list.length; i++) {
+      const h = list[i];
+      if (done.has(i) || S.straits.some(s => (near(s.a, h.a) && near(s.b, h.b)) || (near(s.a, h.b) && near(s.b, h.a)))) continue;
+      done.add(i);
+      const a = snapLand(h.a), b = snapLand(h.b, hitProv(a[0], a[1]));   // bouts recollés sur la terre (côtes différentes de HOI4)
+      S.straits.push({ id: S.nextStrait++, a: a.map(v => Math.round(v * 1e5) / 1e5), b: b.map(v => Math.round(v * 1e5) / 1e5), type: h.type, name: h.name || '', rule: h.rule || '', h: i });
+      n++;
+    }
+    S.straitsFromHoi4 = true;
+  });
+  const bad = S.straits.filter(s => straitInfo(s).warn).length;
+  toast(n + ' détroits de HOI4 ajoutés' + (bad ? ' · ' + bad + ' à corriger (bout rouge)' : ''));
+}
+
+// Dessin (repère monde : 1 px écran = px).
+function straitDraw(c, px) {
+  if (!S.straits.length && !strait.a) return;
+  const onTool = S.view === 'prov' && S.tool === 'strait';
+  if (!onTool && !S.showStraits) return;
+  const w = Math.max(2.5, Math.min(6, 0.5 * S.cam.s * 0.08)) * px;   // épaisseur à l'écran : 2,5 à 6 px selon le zoom
+  c.lineCap = 'butt';
+  const seg = (a, b, col, edge, width, dash) => {
+    c.setLineDash(dash ? [dash * 0.75, dash * 0.25] : []);
+    c.lineDashOffset = -dash * 0.125;
+    c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]);
+    c.strokeStyle = edge; c.lineWidth = width + 1.6 * px; c.stroke();
+    c.strokeStyle = col; c.lineWidth = width; c.stroke();
+  };
+  for (const st of S.straits) {
+    const col = st.type === 'sea' ? 'rgba(46,4,5,.85)' : st.type === 'impassable' ? 'rgba(200,40,170,.85)' : 'rgba(40,110,220,.85)';
+    const edge = 'rgba(255,236,220,.45)';   // liseré clair : HOI4 n'en a pas besoin (mer claire), ici le fond est sombre
+    if (st.id === strait.sel) seg(st.a, st.b, 'rgba(0,0,0,0)', '#ffe14d', w + 3 * px, 0);
+    seg(st.a, st.b, col, edge, st.type === 'sea' ? w : w * 0.7, w * 2.6);
+  }
+  if (strait.a && strait.hover) seg(strait.a, strait.hover, 'rgba(46,4,5,.85)', 'rgba(255,236,220,.45)', w, w * 2.6);
+  c.setLineDash([]);
+}
+
+// Couche écran : poignées du détroit choisi, bouts à corriger.
+function straitDrawScreen(c) {
+  const onTool = S.view === 'prov' && S.tool === 'strait';
+  if (!onTool) return;
+  for (const st of S.straits) {
+    const info = st.id === strait.sel || S.straits.length < 400 ? straitInfo(st) : null;
+    for (const end of ['a', 'b']) {
+      const [sx, sy] = w2s(st[end][0], st[end][1]);
+      if (sx < -10 || sy < -10 || sx > W + 10 || sy > H + 10) continue;
+      const p = info ? (end === 'a' ? info.A : info.B) : null;
+      const bad = info && (!isLandProv(p) || info.A === info.B);
+      if (st.id === strait.sel || bad) {
+        c.beginPath(); c.arc(sx, sy, st.id === strait.sel ? 6 : 5, 0, 6.2832);
+        c.fillStyle = bad ? '#ff3b3b' : '#ffe14d'; c.fill();
+        c.strokeStyle = '#000'; c.lineWidth = 1; c.stroke();
+      }
+    }
+  }
+  if (strait.a) { const [sx, sy] = w2s(strait.a[0], strait.a[1]); c.beginPath(); c.arc(sx, sy, 5, 0, 6.2832); c.fillStyle = '#ffe14d'; c.fill(); }
+}
+
+function straitPanel() {
+  const st = straitById(strait.sel);
+  const n = S.straits.length, bad = S.straits.filter(s => straitInfo(s).warn).length;
+  let h = `<h3>Détroits</h3>
+    <div class="kv">${n} lien${n > 1 ? 's' : ''}${bad ? ` · <b style="color:#ff6b6b">${bad} à corriger</b>` : ''}${S.straitsFromHoi4 ? ' · liste importée de HOI4 (elle remplace celle du jeu)' : ''}</div>
+    <div class="row"><button id="stImp" title="Ajoute les détroits de HOI4 qui manquent (positions réelles) ; tu corriges ensuite">Importer les détroits de HOI4</button></div>
+    ${bad ? `<div class="row"><button id="stNext" title="Choisit et montre le prochain lien à corriger">Suivant à corriger ▶</button><button id="stSame" title="Supprime les liens dont les deux bouts sont dans la même province (îles d’une même province…)">Retirer les inutiles</button></div>` : ''}
+    <div class="row"><label style="width:auto"><input type="checkbox" id="stShow" ${S.showStraits ? 'checked' : ''}> afficher dans toutes les vues</label></div>`;
+  if (st) {
+    const { A, B, warn } = straitInfo(st);
+    const rules = window.HOI4_RULES || [];
+    h += `<h3>Lien #${st.id}</h3>
+      <div class="kv">${A ? esc(A.name) : '—'} ↔ ${B ? esc(B.name) : '—'}</div>
+      ${warn ? `<div class="kv" style="color:#ff6b6b">⚠ ${warn} : déplace le bout rouge</div>` : ''}
+      <div class="row"><label>Type</label><select id="stType">${Object.entries(STRAIT_TYPES).map(([k, v]) => `<option value="${k}" ${st.type === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+      <div class="row"><label>Nom</label><input type="text" id="stName" value="${esc(st.name || '')}"></div>
+      <div class="row"><label>Règle</label><select id="stRule"><option value="">— aucune —</option>${rules.map(r => `<option value="${r.name}" ${st.rule === r.name ? 'selected' : ''}>${esc(r.fr)}</option>`).join('')}</select></div>
+      <div class="row"><button id="stGo">Voir</button><button id="stDel" class="danger">Supprimer (Suppr)</button></div>`;
+  } else h += `<div class="kv">Aucun lien choisi.</div>`;
+  const named = S.straits.filter(s => s.name).sort((a, b) => a.name.localeCompare(b.name));
+  if (named.length) h += `<h3>Liste</h3><div class="row" style="flex-wrap:wrap;max-height:220px;overflow:auto">${named.map(s => `<button data-st="${s.id}" style="flex:none;font-size:11px;padding:2px 6px">${esc(s.name)}</button>`).join('')}</div>`;
+  return h;
+}
+function straitBind() {
+  const go = st => { S.cam.x = (st.a[0] + st.b[0]) / 2; S.cam.y = (st.a[1] + st.b[1]) / 2; S.cam.s = Math.max(S.cam.s, 120); need(); };
+  $('#stImp').onclick = straitImportHoi4;
+  $('#stShow').onchange = e => { S.showStraits = e.target.checked; markDirty(); need(); };
+  if ($('#stNext')) {
+    $('#stNext').onclick = () => {
+      const bad = S.straits.filter(s => straitInfo(s).warn);
+      const i = bad.findIndex(s => s.id === strait.sel);
+      const nx = bad[(i + 1) % bad.length];
+      if (nx) { strait.sel = nx.id; go(nx); syncUI(); }
+    };
+    $('#stSame').onclick = () => {
+      const k = S.straits.length;
+      straitTx(() => { S.straits = S.straits.filter(s => !straitInfo(s).same); if (!straitById(strait.sel)) strait.sel = 0; });
+      toast((k - S.straits.length) + ' liens inutiles retirés');
+    };
+  }
+  for (const b of $('#panel').querySelectorAll('[data-st]')) b.onclick = () => { strait.sel = +b.dataset.st; go(straitById(strait.sel)); syncUI(); };
+  const st = straitById(strait.sel);
+  if (!st) return;
+  $('#stType').onchange = e => straitTx(() => { st.type = e.target.value; });
+  $('#stName').onchange = e => straitTx(() => { st.name = e.target.value.trim(); });
+  $('#stRule').onchange = e => straitTx(() => { st.rule = e.target.value; });
+  $('#stGo').onclick = () => go(st);
+  $('#stDel').onclick = straitDelete;
+}
+
+// Export pour le jeu (data/adjacencies.json) : [lat, lon] ; mer traversée = milieu du trait (le jeu prend la mer la plus proche).
+function straitExport() {
+  const ll = p => [Math.round(p[1] * 1e4) / 1e4, Math.round(p[0] * 1e4) / 1e4];
+  return {
+    source: 'BoP Map Editor (outil Détroits)', replace_hoi4_straits: !!S.straitsFromHoi4,
+    adjacencies: S.straits.map(st => ({
+      type: st.type, from: ll(st.a), to: ll(st.b),
+      through: st.type === 'sea' ? ll([(st.a[0] + st.b[0]) / 2, (st.a[1] + st.b[1]) / 2]) : null,
+      rule: st.rule || '', comment: st.name || '',
+    })),
+  };
+}
+
 /* ===================================================================== entrées pointeur */
 let act = null, spaceDown = false, lastPen = 0, gesture = null;
 const ptrs = new Map();
@@ -1929,6 +2160,7 @@ function toolDown(e, px, py) {
     else if (S.tool === 'vertex') vertexDown(e, px, py, wx, wy, right);
     else if (S.tool === 'weld' && !right) weldDown(wx, wy);
     else if (S.tool === 'snap' && !right) snapClick(wx, wy);
+    else if (S.tool === 'strait') straitDown(e, px, py, wx, wy, right);
   } else if (S.tool === 'weld') { if (!right) weldDown(wx, wy); }
   else if (S.tool === 'pipette') pipetteAt(wx, wy);
   else paintDown(e, px, py, wx, wy, right);
@@ -1974,6 +2206,7 @@ cv.addEventListener('pointermove', e => {
   if (!act) {
     if (S.tool === 'cut' && S.view === 'prov' && cut.pts.length) { cut.hover = [wx, wy]; need(); }
     else if (S.tool === 'poly' && S.view === 'prov' && pdraw.pts.length) { pdraw.hover = snapVertex(wx, wy) || [wx, wy]; need(); }
+    else if (S.tool === 'strait' && S.view === 'prov' && strait.a) { strait.hover = [wx, wy]; need(); }
     return;
   }
   switch (act.kind) {
@@ -1985,6 +2218,7 @@ cv.addEventListener('pointermove', e => {
     case 'paint': paintMove(wx, wy); break;
     case 'weld': weldMove(wx, wy); need(); break;
     case 'brushdel': delCollect(wx, wy); break;
+    case 'sdrag': act.st[act.end] = [wx, wy]; need(); break;
     case 'vdrag': {
       // accroche à un autre sommet (hors ceux qu'on déplace) : lâcher dessus = fusion
       const sn = snapExcluding(wx, wy, act.refs);
@@ -2012,6 +2246,7 @@ function endPointer(e) {
   else if (a.kind === 'cut') { act = a; cutUp(px, py, wx, wy); act = null; }
   else if (a.kind === 'paint') { if (a.changed) a.tx.commit(); }
   else if (a.kind === 'brushdel') delFinish(a);
+  else if (a.kind === 'sdrag') { straitTx(() => {}, a.before); need(); }
   else if (a.kind === 'weld') { if (a.tx.commit()) toast(a.n + (a.vdel ? ' sommets supprimés' : ' sommets fusionnés')); else toast(a.vdel ? 'Aucun sommet supprimable sous le pinceau' : 'Rien à fusionner sous le pinceau'); G.geomDirty = G.asgnDirty = true; need(); }
   else if (a.kind === 'vdrag') {
     G.dragB = null; G.geomDirty = G.asgnDirty = true;
@@ -2030,6 +2265,7 @@ function abortAct() {
   const a = act; act = null;
   if (a.kind === 'cut') cutReset();
   else if (a.kind === 'paint' && a.changed) a.tx.commit();
+  else if (a.kind === 'sdrag') S.straits = JSON.parse(a.before);
   else if (a.kind === 'weld') applyEnts([...a.tx.before].map(([id, b]) => ({ id, before: b, after: null })), false);
   else if (a.kind === 'vdrag') { applyEnts([...a.tx.before].map(([id, b]) => ({ id, before: b, after: null })), false); G.dragB = null; }
   need();
@@ -2060,17 +2296,17 @@ window.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && k === 's') { e.preventDefault(); saveNow(); return; }
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (k === ' ') { spaceDown = true; cv.style.cursor = 'grab'; e.preventDefault(); return; }
-  if (k === 'escape') { cutReset(); if (act) abortAct(); return; }
+  if (k === 'escape') { cutReset(); if (strait.a) { strait.a = null; need(); } if (act) abortAct(); return; }
   if (k === 'enter') { if (S.tool === 'poly') polyFinish(); else cutFinish(); return; }
   if (k === 'l') { S.labels = !S.labels; need(); return; }
   if (k === '/') { e.preventDefault(); $('#search').focus(); return; }
-  if (k === 'delete' || k === 'backspace') { if (S.view === 'prov') deleteSel(); return; }
+  if (k === 'delete' || k === 'backspace') { if (S.view === 'prov') { if (S.tool === 'strait') straitDelete(); else deleteSel(); } return; }
   if (['1', '2', '3', '4', '5'].includes(k)) { setView(['prov', 'country', 'region', 'terrain', 'bg'][+k - 1]); return; }
   if (k === 'z' && S.view === 'prov') { explodeSel(); return; }
   if (k === 'r' && S.view === 'prov') { setTool(S.tool === 'mergepart' ? 'select' : 'mergepart'); return; }
   if (k === 'x' && S.view === 'prov') { setTool(S.tool === 'detach' ? 'select' : 'detach'); return; }
   const map = S.view === 'prov'
-    ? { a: 'select', c: 'cut', e: 'merge', d: 'vertex', w: 'weld', s: 'snap', p: 'poly', h: 'hand' }
+    ? { a: 'select', c: 'cut', e: 'merge', d: 'vertex', w: 'weld', s: 'snap', p: 'poly', j: 'strait', h: 'hand' }
     : S.view === 'bg' ? { b: 'bgmove', i: 'vec', h: 'hand' }
     : S.view === 'terrain' ? { t: 'paint', i: 'pipette', h: 'hand', a: 'paint' }
     : { a: 'assign', w: 'weld', i: 'pipette', h: 'hand' };
@@ -2084,7 +2320,7 @@ window.addEventListener('resize', resize);
 /* ===================================================================== interface */
 const VIEWS = [['prov', 'Provinces'], ['country', 'Pays'], ['region', 'Régions'], ['terrain', 'Terrain'], ['bg', 'Fonds']];
 const TOOLS = {
-  prov: [['select', '↖', 'Sélection', 'A'], ['cut', '✂', 'Découpe', 'C'], ['merge', '⊕', 'Fusion', 'E'], ['vertex', '◇', 'Sommets', 'D'], ['weld', '◎', 'Pinceau', 'W'], ['snap', '🧲', 'Souder', 'S'], ['poly', '⬠', 'Polygone', 'P'], ['hand', '✋', 'Main', 'H']],
+  prov: [['select', '↖', 'Sélection', 'A'], ['cut', '✂', 'Découpe', 'C'], ['merge', '⊕', 'Fusion', 'E'], ['vertex', '◇', 'Sommets', 'D'], ['weld', '◎', 'Pinceau', 'W'], ['snap', '🧲', 'Souder', 'S'], ['poly', '⬠', 'Polygone', 'P'], ['strait', '⋯', 'Détroits', 'J'], ['hand', '✋', 'Main', 'H']],
   bg: [['bgmove', '⇲', 'Placer', 'B'], ['vec', '✨', 'Vectoriser', 'I'], ['hand', '✋', 'Main', 'H']],
   country: [['assign', '🖌', 'Assigner', 'A'], ['weld', '◎', 'Pinceau', 'W'], ['pipette', '💧', 'Pipette', 'I'], ['hand', '✋', 'Main', 'H']],
   region: [['assign', '🖌', 'Assigner', 'A'], ['weld', '◎', 'Pinceau', 'W'], ['pipette', '💧', 'Pipette', 'I'], ['hand', '✋', 'Main', 'H']],
@@ -2099,6 +2335,7 @@ const HINTS = {
   'prov:detach':'Clique une partie d’une province multi-parties (île, enclave…) : seule cette partie devient une nouvelle province, les autres restent ensemble. Reclique sur Détacher (ou X) pour quitter.',
   'prov:poly': 'Clique des points (ils s’accrochent aux sommets existants) ; ferme en recliquant le 1er point, double-clic ou Entrée. Dans une terre = trou (lac), dans le vide = nouvelle zone. Type : voir le panneau.',
   'prov:weld': 'Pinceau (action au choix dans le panneau) — Fusionner : clique ou glisse, tous les sommets sous le cercle fusionnent en un seul (voisines incluses). Supprimer des sommets : clique ou glisse, les sommets sous le cercle disparaissent (frontières partagées gardées collées, jonctions de 3 provinces conservées). Supprimer des provinces : reste cliqué et passe sur les provinces pour les sélectionner (rouge), relâche = suppression. [ ] ou le curseur du panneau = taille. Annuler = Ctrl+Z.',
+  'prov:strait': 'Détroits du jeu (passage sans bateau, trait pointillé comme HOI4) : clique une province de terre puis l’autre rive. Clique un trait pour le choisir (type, nom, règle) ; glisse ses bouts jaunes ; Suppr = supprimer ; clic droit / Échap = annuler. Un bout rouge = pas sur une terre ou même province des deux côtés.',
   'prov:snap': 'Clique une province : tous les sommets des voisines qui sont presque au même endroit que les siens (tolérance dans le panneau) sont soudés dessus. Ctrl+Z annule.',
   'bg:vec': 'Trace un rectangle sur la zone du fond à vectoriser : chaque zone détectée devient une province. Clique une zone pour l’exclure (mer, voisins…), Maj+clic = toutes celles de la même couleur.',
   'bg:bgmove': 'Choisis un fond dans le panneau, glisse-le pour le déplacer ; poignées dans les coins = redimensionner (ratio conservé ; Maj enfoncé au départ = étirer librement, utile pour une carte en projection différente).',
@@ -2140,6 +2377,7 @@ const byName = m => [...m.values()].sort((a, b) => a.name.localeCompare(b.name))
 function renderPanel() {
   const el = $('#panel');
   if (S.view === 'prov') {
+    if (S.tool === 'strait') { el.innerHTML = straitPanel(); straitBind(); return; }
     const p = S.provs.get(S.sel);
     const kindHtml = S.tool === 'poly' || S.tool === 'fill'
       ? `<h3>${S.tool === 'fill' ? 'Remplir une zone vide' : 'Polygone libre'}</h3><div class="row"><label>Type</label><select id="pKind">${(S.tool === 'fill' ? ['sea', 'land', 'lake'] : ['sea', 'land', 'lake', 'erase']).map(k => `<option value="${k}" ${(S.tool === 'fill' ? S.fillKind : S.newKind) === k ? 'selected' : ''}>${{ sea: 'Mer', land: 'Province (terre)', lake: 'Lac', erase: 'Effacer (couper l’intérieur)' }[k]}</option>`).join('')}</select></div>`
@@ -2360,6 +2598,7 @@ function exportAll() {
     { name: dir + 'provinces.geojson', data: j(geo) },
     { name: dir + 'regions.json', data: j({ regions }) },
     { name: dir + 'countries.json', data: j({ countries }) },
+    ...(S.straits.length || S.straitsFromHoi4 ? [{ name: dir + 'adjacencies.json', data: j(straitExport()) }] : []),   // détroits -> data/adjacencies.json du jeu
   ]);
   download('bopvec_export_' + date + '.zip', new Blob([zip], { type: 'application/zip' }));
   const issues = bilan().filter(c => c.warn && c.items.length).map(c => c.items.length + ' ' + c.t.toLowerCase());
