@@ -66,6 +66,7 @@
       id: p.id, name: p.name, color: p.color, country: p.country, region: p.region,
       terrain: p.terrain, polys: p.polys.map(clonePoly),
       ...(p.okMulti ? { okMulti: p.okMulti } : {}),
+      ...(p.air ? { air: p.air } : {}),
     };
   }
 

@@ -147,6 +147,7 @@ input[type=color]{width:38px;height:32px;padding:2px;background:#0f1117;border:1
 <script src="polygon-clipping.min.js"></script>
 <script src="vectorize.js"></script>
 <script src="hoi4_straits.js"></script>
+<script src="hoi4_airzones.js"></script>
 <script>
 'use strict';
 const C = BopCore;
@@ -172,8 +173,9 @@ const S = {
   bg: [], bgSel: -1,
   cam: { x: 0, y: 15, s: 3 }, undo: [], redo: [], dirty: false,
   straits: [], nextStrait: 1, showStraits: true, straitsFromHoi4: false,   // détroits du jeu (outil Détroits)
+  zones: new Map(), nextZone: 1, actZ: 0,   // zones aériennes (régions stratégiques HOI4) = groupes de régions ; p.air = zone de la province
 };
-const G = { edges: [], geomDirty: true, asgnDirty: true, bProv: null, bCountry: null, bRegion: null, dragB: null };
+const G = { edges: [], geomDirty: true, asgnDirty: true, bProv: null, bCountry: null, bRegion: null, bZone: null, zoneLbl: null, dragB: null };
 
 /* ---------------------------------------------------------------- caches géométrie */
 function pathOf(p) {
@@ -232,7 +234,7 @@ function chunkedPath() {
 }
 const strokeAll = (list, c) => { for (const p of list) c.stroke(p); };
 function rebuildBorders() {
-  const pr = chunkedPath(), co = chunkedPath(), re = chunkedPath();
+  const pr = chunkedPath(), co = chunkedPath(), re = chunkedPath(), zo = chunkedPath();
   for (const e of G.edges) {
     if (e.a === e.b) continue;
     pr.seg(e.x1, e.y1, e.x2, e.y2);
@@ -241,8 +243,30 @@ function rebuildBorders() {
     if (!A || !B) continue;
     if (A.country !== B.country) co.seg(e.x1, e.y1, e.x2, e.y2);
     if (A.region !== B.region) re.seg(e.x1, e.y1, e.x2, e.y2);
+    if ((A.air || 0) !== (B.air || 0)) zo.seg(e.x1, e.y1, e.x2, e.y2);
   }
-  G.bProv = pr.list; G.bCountry = co.list; G.bRegion = re.list;
+  G.bProv = pr.list; G.bCountry = co.list; G.bRegion = re.list; G.bZone = zo.list;
+  // noms des zones : centre (pondéré par la surface) des morceaux de provinces proches du plus grand morceau de la zone — les
+  // îles lointaines (provinces en plusieurs parties) et l'autre côté de la ligne de changement de date ne tirent pas le nom
+  // dans la mer ; largeur = étendue de ce groupe
+  const parts = [], big = new Map();
+  for (const p of S.provs.values()) {
+    if (!p.air) continue;
+    for (const poly of p.polys) {
+      const bb = [Infinity, Infinity, -Infinity, -Infinity]; C.ringBBox(poly[0], bb);
+      const pt = { z: p.air, bb, w: Math.abs(C.ringArea(poly[0])) + 1e-9 };
+      parts.push(pt);
+      const b = big.get(p.air); if (!b || pt.w > b.w) big.set(p.air, pt);
+    }
+  }
+  const zl = new Map();
+  for (const { z: zid, bb, w } of parts) {
+    const cx = (bb[0] + bb[2]) / 2, cy = (bb[1] + bb[3]) / 2, B = big.get(zid).bb;
+    if (Math.abs(cx - (B[0] + B[2]) / 2) > 12 || Math.abs(cy - (B[1] + B[3]) / 2) > 8) continue;
+    let z = zl.get(zid); if (!z) zl.set(zid, z = [0, 0, 0, Infinity, -Infinity]);
+    z[0] += cx * w; z[1] += cy * w; z[2] += w; z[3] = Math.min(z[3], bb[0]); z[4] = Math.max(z[4], bb[2]);
+  }
+  G.zoneLbl = zl;
   G.asgnDirty = false;
 }
 
@@ -268,6 +292,7 @@ class Tx {
 function applyEnts(ents, useAfter) {
   for (const e of ents) {
     if (e.straits) { S.straits = JSON.parse(JSON.stringify(useAfter ? e.after : e.before)); if (!straitById(strait.sel)) strait.sel = 0; continue; }
+    if (e.zones) { S.zones = new Map(JSON.parse(JSON.stringify(useAfter ? e.after : e.before)).map(z => [z.id, z])); if (!S.zones.has(S.actZ)) S.actZ = 0; continue; }
     const src = useAfter ? e.after : e.before;
     if (!src) S.provs.delete(e.id); else S.provs.set(e.id, C.cloneProv(src));
   }
@@ -286,6 +311,7 @@ function blankState() {
   S.bg = []; S.bgSel = -1; S.provAlpha = 1;
   S.cloudName = ''; S.cloudSha = ''; S.cloudConflict = false;
   S.straits = []; S.nextStrait = 1; S.showStraits = true; S.straitsFromHoi4 = false;
+  S.zones = new Map(); S.nextZone = 1; S.actZ = 0;
   if (strait) { strait.sel = 0; strait.a = null; }
   G.geomDirty = G.asgnDirty = true;
 }
@@ -344,10 +370,11 @@ function serialize() {
     format: 1, name: S.name, nextProv: S.nextProv, nextCountry: S.nextCountry, nextRegion: S.nextRegion,
     provAlpha: S.provAlpha, cloudName: S.cloudName, cloudSha: S.cloudSha,
     straits: S.straits, nextStrait: S.nextStrait, showStraits: S.showStraits, straitsFromHoi4: S.straitsFromHoi4,
+    zones: [...S.zones.values()], nextZone: S.nextZone,
     bg: S.bg.map(l => ({ name: l.name, src: l.src, x0: l.x0, y0: l.y0, x1: l.x1, y1: l.y1, opacity: l.opacity, visible: l.visible })),
     countries: [...S.countries.values()], regions: [...S.regions.values()],
     provinces: [...S.provs.values()].map(p => ({
-      id: p.id, name: p.name, color: p.color, country: p.country, region: p.region, terrain: p.terrain, ...(p.okMulti ? { okMulti: p.okMulti } : {}),
+      id: p.id, name: p.name, color: p.color, country: p.country, region: p.region, terrain: p.terrain, ...(p.okMulti ? { okMulti: p.okMulti } : {}), ...(p.air ? { air: p.air } : {}),
       polys: p.polys.map(pl => pl.map(r => r.map(v => Math.round(v * 1e7) / 1e7))), // 1e-7° ≈ 1 cm : allège le fichier
     })),
   };
@@ -364,6 +391,8 @@ function deserialize(d) {
   S.straits = (d.straits || []).map(st => ({ ...st, a: st.a.slice(), b: st.b.slice() }));
   S.nextStrait = d.nextStrait || S.straits.reduce((m, st) => Math.max(m, st.id + 1), 1);
   S.showStraits = d.showStraits !== false; S.straitsFromHoi4 = !!d.straitsFromHoi4;
+  for (const z of d.zones || []) S.zones.set(z.id, z);
+  S.nextZone = d.nextZone || [...S.zones.keys()].reduce((m, id) => Math.max(m, id + 1), 1);
   for (const l of d.bg || []) addBgLayer(l);
 }
 
@@ -456,6 +485,7 @@ function provFill(p) {
   switch (S.view) {
     case 'country': { const c = S.countries.get(p.country); return c ? c.color : NONE_COLOR; }
     case 'region': { const r = S.regions.get(p.region); return r ? r.color : NONE_COLOR; }
+    case 'air': { const z = S.zones.get(p.air); return z ? z.color : NONE_COLOR; }
     case 'terrain': return p.terrain === NOT_SET ? NONE_COLOR : TERRAINS[p.terrain][1];
     default: return p.color;
   }
@@ -485,6 +515,7 @@ function renderScene(c, w, h, cam, opts) {
     if (p.terrain === 12) return '#ffffff';   // lacs : toujours blanc pur, dans toutes les vues
     if (view === 'country' || view === 'bg') { const q = S.countries.get(p.country); return q ? q.color : NONE_COLOR; }
     if (view === 'region') { const q = S.regions.get(p.region); return q ? q.color : NONE_COLOR; }
+    if (view === 'air') { const q = S.zones.get(p.air); return q ? q.color : NONE_COLOR; }
     if (view === 'terrain') return p.terrain === NOT_SET ? NONE_COLOR : TERRAINS[p.terrain][1];
     return p.color;
   };
@@ -495,7 +526,7 @@ function renderScene(c, w, h, cam, opts) {
     if (p.polys.length > 1) { c.strokeStyle = c.fillStyle; c.lineWidth = 0.9 / s; c.stroke(pathOf(p)); }
   }
   c.globalAlpha = 1;
-  if (view === 'region' && opts.overlay) {
+  if ((view === 'region' || view === 'air') && opts.overlay) {
     c.globalAlpha = 0.4;
     for (const p of vis) { const q = S.countries.get(p.country); if (!q) continue; c.fillStyle = q.color; c.fill(pathOf(p), 'evenodd'); }
     c.globalAlpha = 1;
@@ -526,9 +557,13 @@ function draw() {
   } else if (G.bProv) {
     ctx.strokeStyle = S.view === 'prov' ? 'rgba(0,0,0,.6)' : 'rgba(0,0,0,.28)';
     ctx.lineWidth = (S.view === 'prov' ? 0.9 : 0.6) * px;
-    strokeAll(G.bProv, ctx);
+    if (S.view !== 'air') strokeAll(G.bProv, ctx);
     if (S.view === 'region') { ctx.strokeStyle = '#000'; ctx.lineWidth = 2.6 * px; strokeAll(G.bRegion, ctx); }
     if (S.view === 'prov') { ctx.strokeStyle = 'rgba(255,255,255,.95)'; ctx.lineWidth = 1.6 * px; strokeAll(G.bRegion, ctx); }
+    if (S.view === 'air') {   // pays clairs, zones épaisses (pas de contours de régions)
+      ctx.strokeStyle = 'rgba(255,255,255,.7)'; ctx.lineWidth = 1.4 * px; strokeAll(G.bCountry, ctx);
+      ctx.strokeStyle = '#000'; ctx.lineWidth = 3.2 * px; strokeAll(G.bZone, ctx);
+    }
     if (S.view === 'country' || S.view === 'region' || S.view === 'prov') {
       ctx.strokeStyle = S.view === 'region' ? 'rgba(255,255,255,.9)' : '#000';
       ctx.lineWidth = (S.view === 'region' ? 3 : S.view === 'prov' ? 1.8 : 2.6) * px; strokeAll(G.bCountry, ctx);
@@ -587,6 +622,17 @@ function draw() {
       if (wpx < 55) continue;
       const [cx, cy] = w2s((bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2);
       ctx.strokeText(p.name, cx, cy); ctx.fillText(p.name, cx, cy);
+    }
+  }
+  if (S.view === 'air' && G.zoneLbl) {
+    ctx.font = 'bold 13px system-ui,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.lineWidth = 3.5; ctx.strokeStyle = 'rgba(0,0,0,.75)';
+    for (const [zid, z] of G.zoneLbl) {
+      const zo = S.zones.get(zid); if (!zo || (z[4] - z[3]) * s < 60) continue;
+      const [cx, cy] = w2s(z[0] / z[2], z[1] / z[2]);
+      if (cx < -100 || cy < -20 || cx > W + 100 || cy > H + 20) continue;
+      ctx.fillStyle = zid === S.actZ ? '#ffe14d' : '#fff';
+      ctx.strokeText(zo.name, cx, cy); ctx.fillText(zo.name, cx, cy);
     }
   }
   if (S.view === 'prov' && S.tool === 'vertex' && sp) {
@@ -1503,12 +1549,15 @@ function bilan() {
     { t: 'Provinces en plusieurs parties', warn: false, valid: true, items: all.filter(p => p.polys.length > 1 && p.okMulti !== multiSig(p)).map(item) },
     { t: 'Pays vides', warn: false, items: [...S.countries.values()].filter(c => !usedC.has(c.id)).map(c => ({ k: 'cn', id: c.id, t: c.name })) },
     { t: 'Régions vides', warn: false, items: [...S.regions.values()].filter(r => !usedR.has(r.id)).map(r => ({ k: 'rg', id: r.id, t: r.name })) },
+    ...airBilan(all),
   ];
 }
 
 function gotoItem(it) {
   if (it.k === 'p') gotoProv(it.id);
   else if (it.k === 'cn') { setView('country'); S.actC = it.id; syncUI(); }
+  else if (it.k === 'az') { setView('air'); S.actZ = it.id; syncUI(); airGo(it.id); }
+  else if (it.k === 'rz') { setView('air'); airGo(0, it.id); }
   else { setView('region'); S.actR = it.id; syncUI(); }
 }
 
@@ -1899,6 +1948,12 @@ function paintApply(p, right) {
     const v = right ? 0 : S.actR;
     if (!right && !S.actR) { toast('Crée ou choisis d’abord une région'); return; }
     if (p.region !== v) { t.touch(p); p.region = v; changed = true; }
+  } else if (S.view === 'air') {
+    const v = right ? 0 : S.actZ;
+    if (!right && !S.actZ) { toast('Crée ou choisis d’abord une zone aérienne'); return; }
+    if (p.region && act.lastR === p.region && act.lastV === v) return;   // même région pendant le glisser
+    act.lastR = p.region; act.lastV = v;
+    for (const q of airGroup(p)) if ((q.air || 0) !== v) { t.touch(q); if (v) q.air = v; else delete q.air; changed = true; }
   } else if (S.view === 'terrain') {
     const v = right ? NOT_SET : S.pen;
     if (p.terrain !== v) { t.touch(p); p.terrain = v; changed = true; }
@@ -1919,8 +1974,150 @@ function pipetteAt(wx, wy) {
   if (!p) return;
   if (S.view === 'country' && p.country) S.actC = p.country;
   else if (S.view === 'region' && p.region) S.actR = p.region;
+  else if (S.view === 'air' && p.air) S.actZ = p.air;
   else if (S.view === 'terrain' && p.terrain !== NOT_SET) S.pen = p.terrain;
   syncUI();
+}
+
+/* ===================================================================== zones aériennes (régions stratégiques de HOI4) */
+// Dans HOI4 une région stratégique regroupe des états (régions ici) ; elle sert aux missions aériennes, à la supériorité
+// aérienne, à la météo et, en mer, aux zones navales. Ici : p.air = id de zone sur chaque province ; on assigne par région
+// entière (une mer sans région = province seule). Import : hoi4_airzones.js (grilles lat/lon 0,25° des régions de HOI4,
+// terre et mer séparées), zone majoritaire sous chaque région.
+const airGroup = p => p.region ? [...S.provs.values()].filter(q => q.region === p.region) : [p];
+const airNeeds = p => { const t = terrType(p); return t === 'land' || t === 'sea'; };   // lacs / infranchissable : pas de zone
+
+function airZonesTx(fn) {
+  const before = [...S.zones.values()].map(z => ({ ...z })), tx = new Tx();
+  fn(tx);
+  const after = [...S.zones.values()].map(z => ({ ...z }));
+  if (!tx.commit()) { S.undo.push([]); S.redo.length = 0; }
+  S.undo[S.undo.length - 1].push({ zones: true, before, after });
+  G.asgnDirty = true; markDirty(); syncUI(); need();
+}
+
+function airGo(zid, rid) {
+  const bb = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const p of S.provs.values()) if (zid ? p.air === zid : p.region === rid) { const b = bbOf(p); bb[0] = Math.min(bb[0], b[0]); bb[1] = Math.min(bb[1], b[1]); bb[2] = Math.max(bb[2], b[2]); bb[3] = Math.max(bb[3], b[3]); }
+  if (isFinite(bb[0])) zoomTo(bb); else toast('Aucune province');
+}
+
+function airBilan(all) {
+  if (!S.zones.size) return [];
+  const used = new Set(all.map(p => p.air)), split = new Map();
+  for (const p of all) if (p.region) { let s = split.get(p.region); if (!s) split.set(p.region, s = new Set()); s.add(p.air || 0); }
+  return [
+    { t: 'Provinces sans zone aérienne', warn: true, items: all.filter(p => !p.air && airNeeds(p)).map(p => ({ k: 'p', id: p.id, t: p.name })) },
+    { t: 'Régions partagées entre plusieurs zones aériennes', warn: true, items: [...split].filter(([, s]) => s.size > 1).map(([rid]) => ({ k: 'rz', id: rid, t: (S.regions.get(rid) || { name: 'Région ' + rid }).name })) },
+    { t: 'Zones aériennes vides', warn: false, items: [...S.zones.values()].filter(z => !used.has(z.id)).map(z => ({ k: 'az', id: z.id, t: z.name })) },
+  ];
+}
+
+function airDecode() {
+  const A = window.HOI4_AIRZONES;
+  if (!A) return null;
+  if (!A._land) for (const k of ['land', 'sea']) {
+    const g = new Int16Array(A.w * A.h), r = A[k];
+    for (let i = 0, o = 0; i < r.length; i += 2) { g.fill(r[i], o, o + r[i + 1]); o += r[i + 1]; }
+    A['_' + k] = g;
+  }
+  if (!A._names) A._names = new Map(A.regions.map(r => [r[0], { name: r[1], sea: !!r[2] }]));
+  return A;
+}
+
+// Remplit seulement ce qui n'a pas encore de zone : pour chaque région (ou mer sans région), vote des cellules 0,25° de HOI4
+// sous ses provinces (pondéré par la surface), grille terre pour la terre, grille mer pour la mer.
+function airImportHoi4() {
+  const A = airDecode();
+  if (!A) { toast('hoi4_airzones.js introuvable'); return; }
+  const cell = (g, lon, lat) => {
+    const r = Math.min(A.h - 1, Math.max(0, Math.floor((90 - lat) / A.res)));
+    const c = ((Math.floor((lon + 180) / A.res) % A.w) + A.w) % A.w;
+    return g[r * A.w + c];
+  };
+  const groups = new Map();
+  for (const p of S.provs.values()) {
+    if (!airNeeds(p)) continue;
+    const sea = terrType(p) === 'sea', key = !sea && p.region ? 'r' + p.region : 'p' + p.id;
+    let gr = groups.get(key); if (!gr) groups.set(key, gr = { provs: [], votes: new Map(), taken: false });
+    gr.provs.push(p); if (p.air) gr.taken = true;
+    const g = sea ? A._sea : A._land, bb = bbOf(p);
+    const add = (x, y, w) => { const h = cell(g, x, y); if (h) gr.votes.set(h, (gr.votes.get(h) || 0) + w); };
+    let st = A.res; while ((bb[2] - bb[0]) * (bb[3] - bb[1]) / (st * st) > 400) st *= 2;   // ≤ ~400 points par province
+    let n = 0;
+    for (let x = (Math.floor(bb[0] / st) + 0.5) * st; x < bb[2]; x += st)
+      for (let y = (Math.floor(bb[1] / st) + 0.5) * st; y < bb[3]; y += st)
+        if (p.polys.some(pl => C.pointInPoly(x, y, pl))) { add(x, y, st * st); n++; }
+    if (!n) add((bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2, 1e-4);   // petite province : son centre
+  }
+  let nz = 0, ng = 0;
+  airZonesTx(tx => {
+    const byH = new Map([...S.zones.values()].filter(z => z.hoi4).map(z => [z.hoi4, z.id]));
+    for (const gr of groups.values()) {
+      if (gr.taken || !gr.votes.size) continue;
+      const h = [...gr.votes].sort((a, b) => b[1] - a[1])[0][0];
+      let zid = byH.get(h);
+      if (!zid) {
+        const info = A._names.get(h) || { name: 'Zone HOI4 ' + h, sea: false };
+        zid = S.nextZone++;
+        S.zones.set(zid, { id: zid, name: info.name, color: info.sea ? C.hsl((h * 47) % 360, 45, 38) : C.autoColor(h * 7 + 3), hoi4: h, sea: info.sea });
+        byH.set(h, zid); nz++;
+      }
+      for (const p of gr.provs) { tx.touch(p); p.air = zid; }
+      ng++;
+    }
+  });
+  const left = [...S.provs.values()].filter(p => !p.air && airNeeds(p)).length;
+  toast(ng + ' régions / mers rangées, ' + nz + ' zones de HOI4 créées' + (left ? ' · ' + left + ' provinces encore sans zone' : '') + ' — Ctrl+Z annule');
+}
+
+function airExport(provs) {
+  const zones = [...S.zones.values()].sort((a, b) => a.id - b.id).map(z => {
+    const ps = provs.filter(p => p.air === z.id);
+    const regions = [...new Set(ps.map(p => p.region).filter(Boolean))].sort((a, b) => a - b);
+    const sea = ps.filter(p => terrType(p) === 'sea').length > ps.length / 2;
+    return { id: z.id, name: z.name, color: z.color, hoi4: z.hoi4 || 0, sea, regions, provinces: ps.map(p => p.id) };
+  }).filter(z => z.provinces.length);
+  return { format: 1, source: 'BoP Map Editor (zones aériennes)', zones };
+}
+
+function airPanel(el) {
+  const cur = S.zones.get(S.actZ);
+  let nR = 0, nP = 0;
+  if (cur) { const rs = new Set(); for (const p of S.provs.values()) if (p.air === cur.id) { nP++; if (p.region) rs.add(p.region); } nR = rs.size; }
+  const left = [...S.provs.values()].filter(p => !p.air && airNeeds(p)).length;
+  el.innerHTML = `<h3>Zones aériennes</h3>
+    <div class="kv">Comme les régions stratégiques de HOI4 : une zone = un groupe de régions (missions aériennes, supériorité aérienne, météo ; en mer : zones navales).</div>
+    <div class="row"><select id="cSel">${opts(byName(S.zones), cur ? cur.id : 0, '— choisir —')}</select><button id="cUp" title="Précédente (ordre alphabétique)" style="flex:none;padding:4px 7px">▲</button><button id="cDn" title="Suivante (ordre alphabétique)" style="flex:none;padding:4px 7px">▼</button><button id="cAdd" title="Nouvelle zone" style="flex:none">＋</button></div>
+    ${cur ? `<div class="row"><input type="color" id="cCol" value="${cur.color}"><input type="text" id="cName" value="${esc(cur.name)}"></div>
+    <div class="kv">${nR} région${nR > 1 ? 's' : ''} · ${nP} province${nP > 1 ? 's' : ''}${cur.hoi4 ? ' · HOI4 n° ' + cur.hoi4 : ''}</div>
+    <div class="row"><button id="cGo">Voir</button><button id="cDel" class="danger">Supprimer cette zone</button></div>` : ''}
+    <div class="row"><label style="width:auto"><input type="checkbox" id="cOv" ${S.overlayCountry ? 'checked' : ''}> pays en transparence</label></div>
+    <h3>HOI4</h3>
+    <div class="row"><button id="zImp">Importer les zones de HOI4</button></div>
+    <div class="kv">Ne touche qu’aux régions et mers encore sans zone : chacune prend la région stratégique de HOI4 majoritaire sous elle (bords approximatifs, à corriger à la main). Ctrl+Z annule.</div>
+    <div class="kv">${S.zones.size} zone${S.zones.size > 1 ? 's' : ''} · ${left} province${left > 1 ? 's' : ''} sans zone</div>`;
+  $('#cSel').onchange = e => { S.actZ = +e.target.value; syncUI(); need(); };
+  const step = d => {
+    const list = byName(S.zones); if (!list.length) return;
+    const i = list.findIndex(o => o.id === (cur ? cur.id : 0));
+    S.actZ = list[i < 0 ? (d > 0 ? 0 : list.length - 1) : (i + d + list.length) % list.length].id; syncUI(); need();
+  };
+  $('#cUp').onclick = () => step(-1);
+  $('#cDn').onclick = () => step(1);
+  $('#cAdd').onclick = () => airZonesTx(() => { const id = S.nextZone++; S.zones.set(id, { id, name: 'Nouvelle zone', color: C.autoColor(id * 7 + 3), hoi4: 0 }); S.actZ = id; });
+  $('#zImp').onclick = airImportHoi4;
+  $('#cOv').onchange = e => { S.overlayCountry = e.target.checked; need(); };
+  if (!cur) return;
+  $('#cCol').oninput = e => { cur.color = e.target.value; need(); };
+  $('#cCol').onchange = markDirty;
+  $('#cName').onchange = e => { cur.name = e.target.value.trim() || cur.name; markDirty(); syncUI(); need(); };
+  $('#cGo').onclick = () => airGo(cur.id);
+  $('#cDel').onclick = () => {
+    const b = $('#cDel');
+    if (!b.dataset.sure) { b.dataset.sure = 1; b.textContent = 'Confirmer la suppression'; return; }
+    airZonesTx(tx => { for (const p of S.provs.values()) if (p.air === cur.id) { tx.touch(p); delete p.air; } S.zones.delete(cur.id); S.actZ = 0; });
+  };
 }
 
 /* ===================================================================== détroits (adjacences du jeu, façon HOI4) */
@@ -2301,7 +2498,7 @@ window.addEventListener('keydown', e => {
   if (k === 'l') { S.labels = !S.labels; need(); return; }
   if (k === '/') { e.preventDefault(); $('#search').focus(); return; }
   if (k === 'delete' || k === 'backspace') { if (S.view === 'prov') { if (S.tool === 'strait') straitDelete(); else deleteSel(); } return; }
-  if (['1', '2', '3', '4', '5'].includes(k)) { setView(['prov', 'country', 'region', 'terrain', 'bg'][+k - 1]); return; }
+  if (['1', '2', '3', '4', '5', '6'].includes(k)) { setView(['prov', 'country', 'region', 'terrain', 'bg', 'air'][+k - 1]); return; }
   if (k === 'z' && S.view === 'prov') { explodeSel(); return; }
   if (k === 'r' && S.view === 'prov') { setTool(S.tool === 'mergepart' ? 'select' : 'mergepart'); return; }
   if (k === 'x' && S.view === 'prov') { setTool(S.tool === 'detach' ? 'select' : 'detach'); return; }
@@ -2309,6 +2506,7 @@ window.addEventListener('keydown', e => {
     ? { a: 'select', c: 'cut', e: 'merge', d: 'vertex', w: 'weld', s: 'snap', p: 'poly', j: 'strait', h: 'hand' }
     : S.view === 'bg' ? { b: 'bgmove', i: 'vec', h: 'hand' }
     : S.view === 'terrain' ? { t: 'paint', i: 'pipette', h: 'hand', a: 'paint' }
+    : S.view === 'air' ? { a: 'assign', i: 'pipette', h: 'hand' }
     : { a: 'assign', w: 'weld', i: 'pipette', h: 'hand' };
   if (map[k]) { setTool(map[k]); return; }
   if (weldView() && S.tool === 'weld' && (k === '[' || k === ']')) { brush.r = Math.max(4, Math.min(120, Math.round(brush.r * (k === ']' ? 1.25 : 0.8)))); syncUI(); need(); return; }
@@ -2318,13 +2516,14 @@ window.addEventListener('keyup', e => { if (e.key === ' ') { spaceDown = false; 
 window.addEventListener('resize', resize);
 
 /* ===================================================================== interface */
-const VIEWS = [['prov', 'Provinces'], ['country', 'Pays'], ['region', 'Régions'], ['terrain', 'Terrain'], ['bg', 'Fonds']];
+const VIEWS = [['prov', 'Provinces'], ['country', 'Pays'], ['region', 'Régions'], ['terrain', 'Terrain'], ['bg', 'Fonds'], ['air', 'Zones aériennes']];
 const TOOLS = {
   prov: [['select', '↖', 'Sélection', 'A'], ['cut', '✂', 'Découpe', 'C'], ['merge', '⊕', 'Fusion', 'E'], ['vertex', '◇', 'Sommets', 'D'], ['weld', '◎', 'Pinceau', 'W'], ['snap', '🧲', 'Souder', 'S'], ['poly', '⬠', 'Polygone', 'P'], ['strait', '⋯', 'Détroits', 'J'], ['hand', '✋', 'Main', 'H']],
   bg: [['bgmove', '⇲', 'Placer', 'B'], ['vec', '✨', 'Vectoriser', 'I'], ['hand', '✋', 'Main', 'H']],
   country: [['assign', '🖌', 'Assigner', 'A'], ['weld', '◎', 'Pinceau', 'W'], ['pipette', '💧', 'Pipette', 'I'], ['hand', '✋', 'Main', 'H']],
   region: [['assign', '🖌', 'Assigner', 'A'], ['weld', '◎', 'Pinceau', 'W'], ['pipette', '💧', 'Pipette', 'I'], ['hand', '✋', 'Main', 'H']],
   terrain: [['paint', '🖌', 'Stylo', 'T'], ['pipette', '💧', 'Pipette', 'I'], ['hand', '✋', 'Main', 'H']],
+  air: [['assign', '🖌', 'Assigner', 'A'], ['pipette', '💧', 'Pipette', 'I'], ['hand', '✋', 'Main', 'H']],
 };
 const HINTS = {
   'prov:select': 'Clique une province pour la sélectionner et l’éditer.',
@@ -2344,6 +2543,8 @@ const HINTS = {
   'region:assign': 'Glisse sur les provinces pour les donner à la région active. Clic droit = retirer.',
   'country:weld': 'Pinceau : clique ou glisse. Fusionner = tous les sommets sous le cercle fusionnent en un seul (voisines incluses). Supprimer des sommets = les sommets sous le cercle disparaissent (jonctions conservées). [ ] ou le curseur du panneau = taille. Annuler = Ctrl+Z.',
   'region:weld': 'Pinceau : clique ou glisse. Fusionner = tous les sommets sous le cercle fusionnent en un seul (voisines incluses). Supprimer des sommets = les sommets sous le cercle disparaissent (jonctions conservées). [ ] ou le curseur du panneau = taille. Annuler = Ctrl+Z.',
+  'air:assign': 'Clique ou glisse sur une région : toute la région passe dans la zone aérienne active (les mers sans région : province par province). Clic droit = retirer de sa zone.',
+  'air:pipette': 'Clique une province pour reprendre sa zone aérienne.',
   'terrain:paint': 'Glisse sur les provinces pour leur appliquer le terrain choisi. Clic droit = non défini. [ ] change de terrain.',
 };
 
@@ -2454,6 +2655,8 @@ function renderPanel() {
     const ov = $('#cOv'); if (ov) ov.onchange = e => { S.overlayCountry = e.target.checked; need(); };
     const wm = $('#wMode'); if (wm) wm.onchange = e => { brush.mode = e.target.value; need(); };
     const w = $('#wRad'); if (w) w.oninput = e => { brush.r = +e.target.value; $('#wRadV').textContent = brush.r + 'px'; need(); };
+  } else if (S.view === 'air') {
+    airPanel(el);
   } else if (S.view === 'bg' && S.tool === 'vec') {
     renderVecPanel(el);
   } else if (S.view === 'bg') {
@@ -2497,7 +2700,7 @@ function renderMenu() {
     <button id="mNEAdd">Compléter avec Natural Earth (terres manquantes)</button>
     <button id="mCloud">☁ Cloud GitHub (sauvegarde partout)</button>
     <label><input type="checkbox" id="mLab" ${S.labels ? 'checked' : ''}> Noms sur la carte (L)</label>
-    <div class="kv" style="margin:0 6px">Raccourcis : 1-4 vues · V C M D H outils · Espace = déplacer · F tout voir · Ctrl+Z / Y</div>`;
+    <div class="kv" style="margin:0 6px">Raccourcis : 1-6 vues · V C M D H outils · Espace = déplacer · F tout voir · Ctrl+Z / Y</div>`;
   $('#mSave').onclick = () => { saveNow(); $('#menu').hidden = true; };
   $('#mFile').onclick = () => { download(S.name.replace(/[^\w\-]+/g, '_') + '.bopvec', new Blob([JSON.stringify(serialize())], { type: 'application/json' })); $('#menu').hidden = true; };
   $('#mExport').onclick = () => { exportAll(); $('#menu').hidden = true; };
@@ -2599,6 +2802,7 @@ function exportAll() {
     { name: dir + 'regions.json', data: j({ regions }) },
     { name: dir + 'countries.json', data: j({ countries }) },
     ...(S.straits.length || S.straitsFromHoi4 ? [{ name: dir + 'adjacencies.json', data: j(straitExport()) }] : []),   // détroits -> data/adjacencies.json du jeu
+    ...(S.zones.size ? [{ name: dir + 'airzones.json', data: j(airExport(provs)) }] : []),   // zones aériennes -> data/airzones.json du jeu
   ]);
   download('bopvec_export_' + date + '.zip', new Blob([zip], { type: 'application/zip' }));
   const issues = bilan().filter(c => c.warn && c.items.length).map(c => c.items.length + ' ' + c.t.toLowerCase());
