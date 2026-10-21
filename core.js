@@ -67,6 +67,8 @@
       terrain: p.terrain, polys: p.polys.map(clonePoly),
       ...(p.okMulti ? { okMulti: p.okMulti } : {}),
       ...(p.air ? { air: p.air } : {}),
+      ...(p.vp ? { vp: p.vp } : {}),   // points de victoire (ville HOI4)
+      ...(p.cap ? { cap: p.cap } : {}), // capitale : id du pays
     };
   }
 

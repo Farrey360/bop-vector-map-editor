@@ -375,6 +375,7 @@ function serialize() {
     countries: [...S.countries.values()], regions: [...S.regions.values()],
     provinces: [...S.provs.values()].map(p => ({
       id: p.id, name: p.name, color: p.color, country: p.country, region: p.region, terrain: p.terrain, ...(p.okMulti ? { okMulti: p.okMulti } : {}), ...(p.air ? { air: p.air } : {}),
+      ...(p.vp ? { vp: p.vp } : {}), ...(p.cap ? { cap: p.cap } : {}),
       polys: p.polys.map(pl => pl.map(r => r.map(v => Math.round(v * 1e7) / 1e7))), // 1e-7° ≈ 1 cm : allège le fichier
     })),
   };
@@ -2771,7 +2772,8 @@ function exportAll() {
     provinces: provs.map(p => {
       const bb = bbOf(p);
       return { id: p.id, name: p.name, color: p.color, country: p.country, region: p.region,
-        terrain: p.terrain === NOT_SET ? null : p.terrain, type: typeOf(p), bbox: bb.map(r6), polygons: polysOut(p) };
+        terrain: p.terrain === NOT_SET ? null : p.terrain, type: typeOf(p), bbox: bb.map(r6), polygons: polysOut(p),
+        ...(p.vp ? { vp: p.vp } : {}), ...(p.cap ? { cap: p.cap } : {}) };
     }),
   };
   const geo = {
