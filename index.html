@@ -234,7 +234,7 @@ function chunkedPath() {
 }
 const strokeAll = (list, c) => { for (const p of list) c.stroke(p); };
 function rebuildBorders() {
-  const pr = chunkedPath(), co = chunkedPath(), re = chunkedPath(), zo = chunkedPath();
+  const pr = chunkedPath(), co = chunkedPath(), re = chunkedPath(), zo = chunkedPath(), sr = chunkedPath(), sz = chunkedPath(), cs = chunkedPath();
   for (const e of G.edges) {
     if (e.a === e.b) continue;
     pr.seg(e.x1, e.y1, e.x2, e.y2);
@@ -244,8 +244,11 @@ function rebuildBorders() {
     if (A.country !== B.country) co.seg(e.x1, e.y1, e.x2, e.y2);
     if (A.region !== B.region) re.seg(e.x1, e.y1, e.x2, e.y2);
     if ((A.air || 0) !== (B.air || 0)) zo.seg(e.x1, e.y1, e.x2, e.y2);
+    const sa = terrType(A) === 'sea', sb = terrType(B) === 'sea';   // vue navale : régions et zones de mer, côtes
+    if (sa && sb) { if (A.region !== B.region) sr.seg(e.x1, e.y1, e.x2, e.y2); if ((A.air || 0) !== (B.air || 0)) sz.seg(e.x1, e.y1, e.x2, e.y2); }
+    else if (sa !== sb) cs.seg(e.x1, e.y1, e.x2, e.y2);
   }
-  G.bProv = pr.list; G.bCountry = co.list; G.bRegion = re.list; G.bZone = zo.list;
+  G.bProv = pr.list; G.bCountry = co.list; G.bRegion = re.list; G.bZone = zo.list; G.bSeaRegion = sr.list; G.bSeaZone = sz.list; G.bCoast = cs.list;
   // noms des zones : centre (pondéré par la surface) des morceaux de provinces proches du plus grand morceau de la zone — les
   // îles lointaines (provinces en plusieurs parties) et l'autre côté de la ligne de changement de date ne tirent pas le nom
   // dans la mer ; largeur = étendue de ce groupe
@@ -487,6 +490,7 @@ function provFill(p) {
     case 'country': { const c = S.countries.get(p.country); return c ? c.color : NONE_COLOR; }
     case 'region': { const r = S.regions.get(p.region); return r ? r.color : NONE_COLOR; }
     case 'air': { const z = S.zones.get(p.air); return z ? z.color : NONE_COLOR; }
+    case 'naval': { if (terrType(p) !== 'sea') return NAVAL_LAND; const z = S.zones.get(p.air); return z ? z.color : NONE_COLOR; }
     case 'terrain': return p.terrain === NOT_SET ? NONE_COLOR : TERRAINS[p.terrain][1];
     default: return p.color;
   }
@@ -517,6 +521,7 @@ function renderScene(c, w, h, cam, opts) {
     if (view === 'country' || view === 'bg') { const q = S.countries.get(p.country); return q ? q.color : NONE_COLOR; }
     if (view === 'region') { const q = S.regions.get(p.region); return q ? q.color : NONE_COLOR; }
     if (view === 'air') { const q = S.zones.get(p.air); return q ? q.color : NONE_COLOR; }
+    if (view === 'naval') { if (terrType(p) !== 'sea') return NAVAL_LAND; const q = S.zones.get(p.air); return q ? q.color : NONE_COLOR; }
     if (view === 'terrain') return p.terrain === NOT_SET ? NONE_COLOR : TERRAINS[p.terrain][1];
     return p.color;
   };
@@ -558,7 +563,12 @@ function draw() {
   } else if (G.bProv) {
     ctx.strokeStyle = S.view === 'prov' ? 'rgba(0,0,0,.6)' : 'rgba(0,0,0,.28)';
     ctx.lineWidth = (S.view === 'prov' ? 0.9 : 0.6) * px;
-    if (S.view !== 'air') strokeAll(G.bProv, ctx);
+    if (S.view !== 'air' && S.view !== 'naval') strokeAll(G.bProv, ctx);
+    if (S.view === 'naval') {   // régions de mer fines, zones navales épaisses, côtes
+      ctx.strokeStyle = 'rgba(255,255,255,.45)'; ctx.lineWidth = 0.8 * px; strokeAll(G.bSeaRegion, ctx);
+      ctx.strokeStyle = 'rgba(0,0,0,.6)'; ctx.lineWidth = 1 * px; strokeAll(G.bCoast, ctx);
+      ctx.strokeStyle = '#000'; ctx.lineWidth = 3.2 * px; strokeAll(G.bSeaZone, ctx);
+    }
     if (S.view === 'region') { ctx.strokeStyle = '#000'; ctx.lineWidth = 2.6 * px; strokeAll(G.bRegion, ctx); }
     if (S.view === 'prov') { ctx.strokeStyle = 'rgba(255,255,255,.95)'; ctx.lineWidth = 1.6 * px; strokeAll(G.bRegion, ctx); }
     if (S.view === 'air') {   // pays clairs, zones épaisses (pas de contours de régions)
@@ -625,11 +635,11 @@ function draw() {
       ctx.strokeText(p.name, cx, cy); ctx.fillText(p.name, cx, cy);
     }
   }
-  if (S.view === 'air' && G.zoneLbl) {
+  if ((S.view === 'air' || S.view === 'naval') && G.zoneLbl) {
     ctx.font = 'bold 13px system-ui,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.lineWidth = 3.5; ctx.strokeStyle = 'rgba(0,0,0,.75)';
     for (const [zid, z] of G.zoneLbl) {
-      const zo = S.zones.get(zid); if (!zo || (z[4] - z[3]) * s < 60) continue;
+      const zo = S.zones.get(zid); if (!zo || (z[4] - z[3]) * s < 60 || (S.view === 'naval' && !zo.sea)) continue;
       const [cx, cy] = w2s(z[0] / z[2], z[1] / z[2]);
       if (cx < -100 || cy < -20 || cx > W + 100 || cy > H + 20) continue;
       ctx.fillStyle = zid === S.actZ ? '#ffe14d' : '#fff';
@@ -1550,6 +1560,8 @@ function bilan() {
     { t: 'Provinces en plusieurs parties', warn: false, valid: true, items: all.filter(p => p.polys.length > 1 && p.okMulti !== multiSig(p)).map(item) },
     { t: 'Pays vides', warn: false, items: [...S.countries.values()].filter(c => !usedC.has(c.id)).map(c => ({ k: 'cn', id: c.id, t: c.name })) },
     { t: 'Régions vides', warn: false, items: [...S.regions.values()].filter(r => !usedR.has(r.id)).map(r => ({ k: 'rg', id: r.id, t: r.name })) },
+    { t: 'Mers sans région de mer', warn: all.some(p => p.region && terrType(p) === 'sea'), items: all.some(p => p.region && terrType(p) === 'sea') ? all.filter(p => !p.region && terrType(p) === 'sea').map(item) : [] },
+    { t: 'Régions mélangeant terre et mer', warn: true, items: mixedRegions(all) },
     ...airBilan(all),
   ];
 }
@@ -1557,7 +1569,7 @@ function bilan() {
 function gotoItem(it) {
   if (it.k === 'p') gotoProv(it.id);
   else if (it.k === 'cn') { setView('country'); S.actC = it.id; syncUI(); }
-  else if (it.k === 'az') { setView('air'); S.actZ = it.id; syncUI(); airGo(it.id); }
+  else if (it.k === 'az') { setView((S.zones.get(it.id) || {}).sea ? 'naval' : 'air'); S.actZ = it.id; syncUI(); airGo(it.id); }
   else if (it.k === 'rz') { setView('air'); airGo(0, it.id); }
   else { setView('region'); S.actR = it.id; syncUI(); }
 }
@@ -1949,9 +1961,10 @@ function paintApply(p, right) {
     const v = right ? 0 : S.actR;
     if (!right && !S.actR) { toast('Crée ou choisis d’abord une région'); return; }
     if (p.region !== v) { t.touch(p); p.region = v; changed = true; }
-  } else if (S.view === 'air') {
+  } else if (S.view === 'air' || S.view === 'naval') {
     const v = right ? 0 : S.actZ;
-    if (!right && !S.actZ) { toast('Crée ou choisis d’abord une zone aérienne'); return; }
+    if (S.view === 'naval' && terrType(p) !== 'sea') return;   // vue navale : seulement les mers
+    if (!right && !S.actZ) { toast(S.view === 'naval' ? 'Crée ou choisis d’abord une zone navale' : 'Crée ou choisis d’abord une zone aérienne'); return; }
     if (p.region && act.lastR === p.region && act.lastV === v) return;   // même région pendant le glisser
     act.lastR = p.region; act.lastV = v;
     for (const q of airGroup(p)) if ((q.air || 0) !== v) { t.touch(q); if (v) q.air = v; else delete q.air; changed = true; }
@@ -1975,7 +1988,7 @@ function pipetteAt(wx, wy) {
   if (!p) return;
   if (S.view === 'country' && p.country) S.actC = p.country;
   else if (S.view === 'region' && p.region) S.actR = p.region;
-  else if (S.view === 'air' && p.air) S.actZ = p.air;
+  else if ((S.view === 'air' || S.view === 'naval') && p.air) S.actZ = p.air;
   else if (S.view === 'terrain' && p.terrain !== NOT_SET) S.pen = p.terrain;
   syncUI();
 }
@@ -2082,7 +2095,8 @@ function airExport(provs) {
   return { format: 1, source: 'BoP Map Editor (zones aériennes)', zones };
 }
 
-function airPanel(el) {
+function airPanel(el, naval) {
+  if (naval) return navalPanel(el);
   const cur = S.zones.get(S.actZ);
   let nR = 0, nP = 0;
   if (cur) { const rs = new Set(); for (const p of S.provs.values()) if (p.air === cur.id) { nP++; if (p.region) rs.add(p.region); } nR = rs.size; }
@@ -2109,6 +2123,56 @@ function airPanel(el) {
   $('#cAdd').onclick = () => airZonesTx(() => { const id = S.nextZone++; S.zones.set(id, { id, name: 'Nouvelle zone', color: C.autoColor(id * 7 + 3), hoi4: 0 }); S.actZ = id; });
   $('#zImp').onclick = airImportHoi4;
   $('#cOv').onchange = e => { S.overlayCountry = e.target.checked; need(); };
+  if (!cur) return;
+  $('#cCol').oninput = e => { cur.color = e.target.value; need(); };
+  $('#cCol').onchange = markDirty;
+  $('#cName').onchange = e => { cur.name = e.target.value.trim() || cur.name; markDirty(); syncUI(); need(); };
+  $('#cGo').onclick = () => airGo(cur.id);
+  $('#cDel').onclick = () => {
+    const b = $('#cDel');
+    if (!b.dataset.sure) { b.dataset.sure = 1; b.textContent = 'Confirmer la suppression'; return; }
+    airZonesTx(tx => { for (const p of S.provs.values()) if (p.air === cur.id) { tx.touch(p); delete p.air; } S.zones.delete(cur.id); S.actZ = 0; });
+  };
+}
+
+/* ===================================================================== zones navales (vue 7) */
+// Mêmes zones que les zones aériennes (dans HOI4 une région stratégique de mer sert aux deux : missions navales,
+// supériorité navale, météo) ; cette vue ne montre que les mers : régions de mer en traits fins, zones en traits épais.
+// Les mers sont regroupées en régions de mer (vue Régions, ou tools/make_sea_regions.py) : un clic range toute la région.
+const NAVAL_LAND = '#7d7564';
+function mixedRegions(all) {
+  const k = new Map();
+  for (const p of all) if (p.region) { const t = terrType(p); if (t !== 'land' && t !== 'sea') continue; let m = k.get(p.region); if (!m) k.set(p.region, m = new Set()); m.add(t); }
+  return [...k].filter(([, m]) => m.size > 1).map(([rid]) => ({ k: 'rg', id: rid, t: (S.regions.get(rid) || { name: 'Région ' + rid }).name }));
+}
+function navalPanel(el) {
+  const seaZ = new Map([...S.zones].filter(([, z]) => z.sea));
+  const cur = seaZ.get(S.actZ);
+  let nR = 0, nP = 0;
+  if (cur) { const rs = new Set(); for (const p of S.provs.values()) if (p.air === cur.id && terrType(p) === 'sea') { nP++; if (p.region) rs.add(p.region); } nR = rs.size; }
+  const seas = [...S.provs.values()].filter(p => terrType(p) === 'sea');
+  const left = seas.filter(p => !p.air).length, noReg = seas.filter(p => !p.region).length;
+  const nSR = new Set(seas.map(p => p.region).filter(Boolean)).size;
+  el.innerHTML = `<h3>Zones navales</h3>
+    <div class="kv">Comme les régions stratégiques de mer de HOI4 : une zone = un groupe de régions de mer (missions navales, supériorité navale, météo). Ce sont les mêmes zones que les zones aériennes en mer.</div>
+    <div class="row"><select id="cSel">${opts(byName(seaZ), cur ? cur.id : 0, '— choisir —')}</select><button id="cUp" title="Précédente (ordre alphabétique)" style="flex:none;padding:4px 7px">▲</button><button id="cDn" title="Suivante (ordre alphabétique)" style="flex:none;padding:4px 7px">▼</button><button id="cAdd" title="Nouvelle zone navale" style="flex:none">＋</button></div>
+    ${cur ? `<div class="row"><input type="color" id="cCol" value="${cur.color}"><input type="text" id="cName" value="${esc(cur.name)}"></div>
+    <div class="kv">${nR} région${nR > 1 ? 's' : ''} de mer · ${nP} mer${nP > 1 ? 's' : ''}${cur.hoi4 ? ' · HOI4 n° ' + cur.hoi4 : ''}</div>
+    <div class="row"><button id="cGo">Voir</button><button id="cDel" class="danger">Supprimer cette zone</button></div>` : ''}
+    <h3>HOI4</h3>
+    <div class="row"><button id="zImp">Importer les zones de HOI4</button></div>
+    <div class="kv">Ne touche qu’aux mers encore sans zone (et aux régions de terre sans zone). Ctrl+Z annule.</div>
+    <div class="kv">${seaZ.size} zone${seaZ.size > 1 ? 's' : ''} navale${seaZ.size > 1 ? 's' : ''} · ${seas.length} mers en ${nSR} régions · ${left} mer${left > 1 ? 's' : ''} sans zone · ${noReg} sans région</div>`;
+  $('#cSel').onchange = e => { S.actZ = +e.target.value; syncUI(); need(); };
+  const step = d => {
+    const list = byName(seaZ); if (!list.length) return;
+    const i = list.findIndex(o => o.id === (cur ? cur.id : 0));
+    S.actZ = list[i < 0 ? (d > 0 ? 0 : list.length - 1) : (i + d + list.length) % list.length].id; syncUI(); need();
+  };
+  $('#cUp').onclick = () => step(-1);
+  $('#cDn').onclick = () => step(1);
+  $('#cAdd').onclick = () => airZonesTx(() => { const id = S.nextZone++; S.zones.set(id, { id, name: 'Nouvelle zone navale', color: C.hsl((id * 47) % 360, 45, 38), hoi4: 0, sea: true }); S.actZ = id; });
+  $('#zImp').onclick = airImportHoi4;
   if (!cur) return;
   $('#cCol').oninput = e => { cur.color = e.target.value; need(); };
   $('#cCol').onchange = markDirty;
@@ -2499,7 +2563,7 @@ window.addEventListener('keydown', e => {
   if (k === 'l') { S.labels = !S.labels; need(); return; }
   if (k === '/') { e.preventDefault(); $('#search').focus(); return; }
   if (k === 'delete' || k === 'backspace') { if (S.view === 'prov') { if (S.tool === 'strait') straitDelete(); else deleteSel(); } return; }
-  if (['1', '2', '3', '4', '5', '6'].includes(k)) { setView(['prov', 'country', 'region', 'terrain', 'bg', 'air'][+k - 1]); return; }
+  if (['1', '2', '3', '4', '5', '6', '7'].includes(k)) { setView(['prov', 'country', 'region', 'terrain', 'bg', 'air', 'naval'][+k - 1]); return; }
   if (k === 'z' && S.view === 'prov') { explodeSel(); return; }
   if (k === 'r' && S.view === 'prov') { setTool(S.tool === 'mergepart' ? 'select' : 'mergepart'); return; }
   if (k === 'x' && S.view === 'prov') { setTool(S.tool === 'detach' ? 'select' : 'detach'); return; }
@@ -2507,7 +2571,7 @@ window.addEventListener('keydown', e => {
     ? { a: 'select', c: 'cut', e: 'merge', d: 'vertex', w: 'weld', s: 'snap', p: 'poly', j: 'strait', h: 'hand' }
     : S.view === 'bg' ? { b: 'bgmove', i: 'vec', h: 'hand' }
     : S.view === 'terrain' ? { t: 'paint', i: 'pipette', h: 'hand', a: 'paint' }
-    : S.view === 'air' ? { a: 'assign', i: 'pipette', h: 'hand' }
+    : S.view === 'air' || S.view === 'naval' ? { a: 'assign', i: 'pipette', h: 'hand' }
     : { a: 'assign', w: 'weld', i: 'pipette', h: 'hand' };
   if (map[k]) { setTool(map[k]); return; }
   if (weldView() && S.tool === 'weld' && (k === '[' || k === ']')) { brush.r = Math.max(4, Math.min(120, Math.round(brush.r * (k === ']' ? 1.25 : 0.8)))); syncUI(); need(); return; }
@@ -2517,7 +2581,7 @@ window.addEventListener('keyup', e => { if (e.key === ' ') { spaceDown = false; 
 window.addEventListener('resize', resize);
 
 /* ===================================================================== interface */
-const VIEWS = [['prov', 'Provinces'], ['country', 'Pays'], ['region', 'Régions'], ['terrain', 'Terrain'], ['bg', 'Fonds'], ['air', 'Zones aériennes']];
+const VIEWS = [['prov', 'Provinces'], ['country', 'Pays'], ['region', 'Régions'], ['terrain', 'Terrain'], ['bg', 'Fonds'], ['air', 'Zones aériennes'], ['naval', 'Zones navales']];
 const TOOLS = {
   prov: [['select', '↖', 'Sélection', 'A'], ['cut', '✂', 'Découpe', 'C'], ['merge', '⊕', 'Fusion', 'E'], ['vertex', '◇', 'Sommets', 'D'], ['weld', '◎', 'Pinceau', 'W'], ['snap', '🧲', 'Souder', 'S'], ['poly', '⬠', 'Polygone', 'P'], ['strait', '⋯', 'Détroits', 'J'], ['hand', '✋', 'Main', 'H']],
   bg: [['bgmove', '⇲', 'Placer', 'B'], ['vec', '✨', 'Vectoriser', 'I'], ['hand', '✋', 'Main', 'H']],
@@ -2525,6 +2589,7 @@ const TOOLS = {
   region: [['assign', '🖌', 'Assigner', 'A'], ['weld', '◎', 'Pinceau', 'W'], ['pipette', '💧', 'Pipette', 'I'], ['hand', '✋', 'Main', 'H']],
   terrain: [['paint', '🖌', 'Stylo', 'T'], ['pipette', '💧', 'Pipette', 'I'], ['hand', '✋', 'Main', 'H']],
   air: [['assign', '🖌', 'Assigner', 'A'], ['pipette', '💧', 'Pipette', 'I'], ['hand', '✋', 'Main', 'H']],
+  naval: [['assign', '🖌', 'Assigner', 'A'], ['pipette', '💧', 'Pipette', 'I'], ['hand', '✋', 'Main', 'H']],
 };
 const HINTS = {
   'prov:select': 'Clique une province pour la sélectionner et l’éditer.',
@@ -2546,6 +2611,8 @@ const HINTS = {
   'region:weld': 'Pinceau : clique ou glisse. Fusionner = tous les sommets sous le cercle fusionnent en un seul (voisines incluses). Supprimer des sommets = les sommets sous le cercle disparaissent (jonctions conservées). [ ] ou le curseur du panneau = taille. Annuler = Ctrl+Z.',
   'air:assign': 'Clique ou glisse sur une région : toute la région passe dans la zone aérienne active (les mers sans région : province par province). Clic droit = retirer de sa zone.',
   'air:pipette': 'Clique une province pour reprendre sa zone aérienne.',
+  'naval:assign': 'Clique ou glisse sur une mer : toute sa région de mer passe dans la zone navale active (mer sans région : province seule). Clic droit = retirer de sa zone. Les terres sont ignorées.',
+  'naval:pipette': 'Clique une mer pour reprendre sa zone navale.',
   'terrain:paint': 'Glisse sur les provinces pour leur appliquer le terrain choisi. Clic droit = non défini. [ ] change de terrain.',
 };
 
@@ -2656,8 +2723,8 @@ function renderPanel() {
     const ov = $('#cOv'); if (ov) ov.onchange = e => { S.overlayCountry = e.target.checked; need(); };
     const wm = $('#wMode'); if (wm) wm.onchange = e => { brush.mode = e.target.value; need(); };
     const w = $('#wRad'); if (w) w.oninput = e => { brush.r = +e.target.value; $('#wRadV').textContent = brush.r + 'px'; need(); };
-  } else if (S.view === 'air') {
-    airPanel(el);
+  } else if (S.view === 'air' || S.view === 'naval') {
+    airPanel(el, S.view === 'naval');
   } else if (S.view === 'bg' && S.tool === 'vec') {
     renderVecPanel(el);
   } else if (S.view === 'bg') {
@@ -2701,7 +2768,7 @@ function renderMenu() {
     <button id="mNEAdd">Compléter avec Natural Earth (terres manquantes)</button>
     <button id="mCloud">☁ Cloud GitHub (sauvegarde partout)</button>
     <label><input type="checkbox" id="mLab" ${S.labels ? 'checked' : ''}> Noms sur la carte (L)</label>
-    <div class="kv" style="margin:0 6px">Raccourcis : 1-6 vues · V C M D H outils · Espace = déplacer · F tout voir · Ctrl+Z / Y</div>`;
+    <div class="kv" style="margin:0 6px">Raccourcis : 1-7 vues · V C M D H outils · Espace = déplacer · F tout voir · Ctrl+Z / Y</div>`;
   $('#mSave').onclick = () => { saveNow(); $('#menu').hidden = true; };
   $('#mFile').onclick = () => { download(S.name.replace(/[^\w\-]+/g, '_') + '.bopvec', new Blob([JSON.stringify(serialize())], { type: 'application/json' })); $('#menu').hidden = true; };
   $('#mExport').onclick = () => { exportAll(); $('#menu').hidden = true; };
