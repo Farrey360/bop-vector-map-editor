@@ -1874,7 +1874,12 @@ function vdelAt(wx, wy, tx) {
 }
 
 /* outil Souder : les sommets des voisines qui sont presque (mais pas exactement) sur ceux de la province cliquée
-   sont ramenés pile dessus. Un sommet déplacé entraîne tous ceux qui lui étaient identiques (3e province, etc.). */
+   sont ramenés pile dessus. Un sommet déplacé entraîne tous ceux qui lui étaient identiques (3e province, etc.).
+   Puis réparation des liaisons sans sommet commun (même tolérance) :
+   - sommet d'une voisine tout près d'un bord de la province -> posé sur ce bord, et ajouté à la province ;
+   - sommet de la province tout près d'un bord d'une voisine -> ajouté à ce bord de la voisine ;
+   - bords qui se croisent sans sommet -> le point de croisement est ajouté aux deux.
+   Un point ajouté sur un bord l'est aussi chez toutes les provinces qui partagent exactement ce bord (pas de T-jonction). */
 let snapTol = 2;   // km sur la carte (ne dépend plus du zoom)
 function snapClick(wx, wy) {
   const p = hitProv(wx, wy);
@@ -1888,43 +1893,151 @@ function snapClick(wx, wy) {
     if (q === p) continue;
     const b = bbOf(q);
     if (b[2] < bb[0] - tol || b[0] > bb[2] + tol || b[3] < bb[1] - tol || b[1] > bb[3] + tol) continue;
-    for (const poly of q.polys) for (const ring of poly) rings.push({ q, ring });
+    for (const poly of q.polys) for (let ri = 0; ri < poly.length; ri++) rings.push({ q, poly, ri, ring: poly[ri] });
   }
+  const own = [];                         // anneaux de p
+  for (const poly of p.polys) for (let ri = 0; ri < poly.length; ri++) own.push({ q: p, poly, ri, ring: poly[ri] });
   const grid = new Map(), cs = tol || 1e-9;
   const gk = (x, y) => Math.floor(x / cs) + ',' + Math.floor(y / cs);
   for (const r of rings) for (let i = 0; i < r.ring.length; i += 2) {
     const k = gk(r.ring[i], r.ring[i + 1]); let a = grid.get(k); if (!a) grid.set(k, a = []); a.push([r.ring[i], r.ring[i + 1]]);
   }
-  const own = new Set();
-  for (const poly of p.polys) for (const ring of poly) for (let i = 0; i < ring.length; i += 2) own.add(key(ring[i], ring[i + 1]));
+  const ownK = new Set();
+  for (const r of own) for (let i = 0; i < r.ring.length; i += 2) ownK.add(key(r.ring[i], r.ring[i + 1]));
   const target = new Map();               // clé du sommet voisin -> [x, y] cible
   const best = new Map();
-  for (const poly of p.polys) for (const ring of poly) for (let i = 0; i < ring.length; i += 2) {
-    const x = ring[i], y = ring[i + 1], cx = Math.floor(x / cs), cy = Math.floor(y / cs);
-    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
-      const a = grid.get((cx + dx) + ',' + (cy + dy)); if (!a) continue;
-      for (const [vx, vy] of a) {
-        const k = key(vx, vy); if (own.has(k)) continue;
-        const d = (vx - x) * (vx - x) + (vy - y) * (vy - y);
-        if (d <= t2 && (!best.has(k) || d < best.get(k))) { best.set(k, d); target.set(k, [x, y]); }
+  for (const r of own) {
+    const ring = r.ring;
+    for (let i = 0; i < ring.length; i += 2) {
+      const x = ring[i], y = ring[i + 1], cx = Math.floor(x / cs), cy = Math.floor(y / cs);
+      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+        const a = grid.get((cx + dx) + ',' + (cy + dy)); if (!a) continue;
+        for (const [vx, vy] of a) {
+          const k = key(vx, vy); if (ownK.has(k)) continue;
+          const d = (vx - x) * (vx - x) + (vy - y) * (vy - y);
+          if (d <= t2 && (!best.has(k) || d < best.get(k))) { best.set(k, d); target.set(k, [x, y]); }
+        }
       }
     }
   }
-  if (!target.size) { toast('Rien à souder (sommets déjà collés ou trop loin)'); return; }
-  const tx = new Tx(), ids = new Set(); let n = 0;
-  for (const r of rings) {
-    let touched = false;
-    for (let i = 0; i < r.ring.length; i += 2) {
-      const t = target.get(key(r.ring[i], r.ring[i + 1]));
+  const tx = new Tx(), ids = new Set();
+  const touch = r => { tx.touch(r.q); ids.add(r.q.id); };
+  // déplace tous les sommets voisins dont la clé est dans tg (sommets identiques entre provinces : tous ensemble)
+  const moveAll = tg => {
+    let n = 0;
+    for (const r of rings) for (let i = 0; i < r.ring.length; i += 2) {
+      const t = tg.get(key(r.ring[i], r.ring[i + 1]));
       if (!t) continue;
-      if (!touched) { tx.touch(r.q); touched = true; }
-      r.ring[i] = t[0]; r.ring[i + 1] = t[1]; n++;
+      touch(r); r.ring[i] = t[0]; r.ring[i + 1] = t[1]; n++;
     }
-    if (touched) ids.add(r.q.id);
+    return n;
+  };
+  moveAll(target);
+  const welded = target.size;
+
+  // ---- réparation : points à ajouter sur des bords (clé de bord non orientée -> points)
+  const edges = rs => {                   // [ax, ay, bx, by]
+    const out = [];
+    for (const r of rs) { const g = r.ring, n = g.length; for (let i = 0; i < n; i += 2) { const j = (i + 2) % n; out.push([g[i], g[i + 1], g[j], g[j + 1]]); } }
+    return out;
+  };
+  const ekey = (ax, ay, bx, by) => { const a = key(ax, ay), b = key(bx, by); return a < b ? a + '|' + b : b + '|' + a; };
+  const proj = (x, y, e) => {             // [distance², t, px, py] du point au segment
+    const ex = e[2] - e[0], ey = e[3] - e[1], L = ex * ex + ey * ey;
+    const t = L > 0 ? ((x - e[0]) * ex + (y - e[1]) * ey) / L : 0;
+    const tc = Math.max(0, Math.min(1, t)), px = e[0] + tc * ex, py = e[1] + tc * ey;
+    return [(x - px) * (x - px) + (y - py) * (y - py), t, px, py];
+  };
+  const near = (e, x, y) => x >= Math.min(e[0], e[2]) - tol && x <= Math.max(e[0], e[2]) + tol && y >= Math.min(e[1], e[3]) - tol && y <= Math.max(e[1], e[3]) + tol;
+  const isEnd = (e, x, y) => { const k = key(x, y); return k === key(e[0], e[1]) || k === key(e[2], e[3]); };
+  const addPts = new Map();               // clé de bord -> [[x, y], ...]
+  const addPt = (e, x, y) => {
+    const k = ekey(e[0], e[1], e[2], e[3]); let a = addPts.get(k); if (!a) addPts.set(k, a = []);
+    if (!a.some(([u, v]) => key(u, v) === key(x, y))) a.push([x, y]);
+  };
+  // 1) sommet voisin tout près d'un bord de p : posé sur le bord (et ajouté à ce bord de p)
+  const ownE = edges(own);
+  const onEdge = new Map();
+  for (const r of rings) for (let i = 0; i < r.ring.length; i += 2) {
+    const x = r.ring[i], y = r.ring[i + 1], k = key(x, y);
+    if (ownK.has(k) || target.has(k) || onEdge.has(k)) continue;
+    if (x < bb[0] - tol || x > bb[2] + tol || y < bb[1] - tol || y > bb[3] + tol) continue;
+    let bd = t2, bp = null;
+    for (const e of ownE) {
+      if (!near(e, x, y)) continue;
+      const pr = proj(x, y, e);
+      if (pr[0] <= bd && pr[1] > 0 && pr[1] < 1) { bd = pr[0]; bp = [pr[2], pr[3], e]; }
+    }
+    if (bp && bd > 0) onEdge.set(k, bp);
   }
+  const tg2 = new Map();
+  for (const [k, [px, py, e]] of onEdge) { tg2.set(k, [px, py]); addPt(e, px, py); }
+  moveAll(tg2);
+  // 2) sommet de p tout près d'un bord voisin (sans sommet voisin dessus) : ajouté à ce bord
+  const inBB = e => !(Math.max(e[0], e[2]) < bb[0] - tol || Math.min(e[0], e[2]) > bb[2] + tol || Math.max(e[1], e[3]) < bb[1] - tol || Math.min(e[1], e[3]) > bb[3] + tol);
+  const nbE = edges(rings).filter(inBB);
+  const nbV = new Set(); for (const r of rings) for (let i = 0; i < r.ring.length; i += 2) nbV.add(key(r.ring[i], r.ring[i + 1]));
+  let tj = 0, cross = 0;
+  for (const r of own) for (let i = 0; i < r.ring.length; i += 2) {
+    const x = r.ring[i], y = r.ring[i + 1];
+    if (nbV.has(key(x, y))) continue;
+    let bd = t2, be = null;
+    for (const e of nbE) {
+      if (!near(e, x, y)) continue;
+      const pr = proj(x, y, e);
+      if (pr[0] <= bd && pr[1] > 0 && pr[1] < 1) { bd = pr[0]; be = e; }
+    }
+    if (be) { addPt(be, x, y); tj++; }
+  }
+  // 3) bords de p et bords voisins qui se croisent sans sommet : point de croisement ajouté aux deux
+  for (const e of ownE) {
+    const ax = Math.min(e[0], e[2]), bx = Math.max(e[0], e[2]), ay = Math.min(e[1], e[3]), by = Math.max(e[1], e[3]);
+    for (const f of nbE) {
+      if (Math.max(f[0], f[2]) < ax || Math.min(f[0], f[2]) > bx || Math.max(f[1], f[3]) < ay || Math.min(f[1], f[3]) > by) continue;
+      const rx = e[2] - e[0], ry = e[3] - e[1], sx = f[2] - f[0], sy = f[3] - f[1], den = rx * sy - ry * sx;
+      if (Math.abs(den) < 1e-20) continue;
+      const qx = f[0] - e[0], qy = f[1] - e[1];
+      const t = (qx * sy - qy * sx) / den, u = (qx * ry - qy * rx) / den;
+      if (t <= 1e-9 || t >= 1 - 1e-9 || u <= 1e-9 || u >= 1 - 1e-9) continue;
+      const x = e[0] + t * rx, y = e[1] + t * ry;
+      if (isEnd(e, x, y) || isEnd(f, x, y)) continue;
+      addPt(e, x, y); addPt(f, x, y); cross++;
+    }
+  }
+  // insertion : chaque anneau (p + voisines) reçoit les points prévus sur ses bords, dans l'ordre du bord, plus tout
+  // nouveau point qui tombe pile sur un de ses bords (bord commun découpé autrement chez une 3e province)
+  let added = 0;
+  const allNew = [];
+  for (const a of addPts.values()) for (const pt of a) if (!allNew.some(([u, v]) => key(u, v) === key(pt[0], pt[1]))) allNew.push(pt);
+  const onSeg = (e, x, y) => {
+    if (x < Math.min(e[0], e[2]) - 1e-12 || x > Math.max(e[0], e[2]) + 1e-12 || y < Math.min(e[1], e[3]) - 1e-12 || y > Math.max(e[1], e[3]) + 1e-12) return false;
+    const pr = proj(x, y, e); return pr[0] < 1e-18 && pr[1] > 0 && pr[1] < 1;   // à moins de 1e-9° du bord
+  };
+  if (addPts.size) for (const r of own.concat(rings)) {
+    const g = r.ring, n = g.length; let out = null;
+    for (let i = 0; i < n; i += 2) {
+      const j = (i + 2) % n, e = [g[i], g[i + 1], g[j], g[j + 1]];
+      const a = (addPts.get(ekey(e[0], e[1], e[2], e[3])) || []).slice();
+      for (const pt of allNew) if (onSeg(e, pt[0], pt[1]) && !a.some(([u, v]) => key(u, v) === key(pt[0], pt[1]))) a.push(pt);
+      if (out) out.push(g[i], g[i + 1]);
+      if (!a.length) continue;
+      if (!out) out = g.slice(0, i + 2);
+      const ex = e[2] - e[0], ey = e[3] - e[1], L = ex * ex + ey * ey || 1;
+      const pts = a.filter(([x, y]) => !isEnd(e, x, y))
+        .map(([x, y]) => [((x - e[0]) * ex + (y - e[1]) * ey) / L, x, y]).sort((u, v) => u[0] - v[0]);
+      for (const [, x, y] of pts) { out.push(x, y); added++; }
+    }
+    if (out) { touch(r); r.poly[r.ri] = out; r.ring = out; }
+  }
+  if (!welded && !onEdge.size && !added) { toast('Rien à souder ni à réparer (déjà reliées ou trop loin)'); return; }
   dedupeRings(ids);
   tx.commit(); G.geomDirty = G.asgnDirty = true; need();
-  toast(target.size + ' sommets soudés (' + ids.size + ' provinces voisines) — Ctrl+Z pour annuler');
+  const parts = [];
+  if (welded) parts.push(welded + ' sommets soudés');
+  if (onEdge.size) parts.push(onEdge.size + ' sommets posés sur la frontière');
+  if (cross) parts.push(cross + ' croisements reliés');
+  if (tj) parts.push(tj + ' sommets ajoutés aux voisines');
+  toast(parts.join(', ') + ' (' + ids.size + ' provinces) — Ctrl+Z pour annuler');
 }
 function weldDown(wx, wy) {
   if (brush.mode === 'del' && S.view === 'prov') { act = { kind: 'brushdel', ids: new Set() }; delCollect(wx, wy); return; }
@@ -2627,7 +2740,7 @@ const HINTS = {
   'prov:poly': 'Clique des points (ils s’accrochent aux sommets existants) ; ferme en recliquant le 1er point, double-clic ou Entrée. Dans une terre = trou (lac), dans le vide = nouvelle zone. Type : voir le panneau.',
   'prov:weld': 'Pinceau (action au choix dans le panneau) — Fusionner : clique ou glisse, tous les sommets sous le cercle fusionnent en un seul (voisines incluses). Supprimer des sommets : clique ou glisse, les sommets sous le cercle disparaissent (frontières partagées gardées collées, jonctions de 3 provinces conservées). Supprimer des provinces : reste cliqué et passe sur les provinces pour les sélectionner (rouge), relâche = suppression. [ ] ou le curseur du panneau = taille. Annuler = Ctrl+Z.',
   'prov:strait': 'Détroits du jeu (passage sans bateau, trait pointillé comme HOI4) : clique une province de terre puis l’autre rive. Clique un trait pour le choisir (type, nom, règle) ; glisse ses bouts jaunes ; Suppr = supprimer ; clic droit / Échap = annuler. Un bout rouge = pas sur une terre ou même province des deux côtés.',
-  'prov:snap': 'Clique une province : tous les sommets des voisines qui sont presque au même endroit que les siens (tolérance dans le panneau) sont soudés dessus. Ctrl+Z annule.',
+  'prov:snap': 'Clique une province : tous les sommets des voisines qui sont presque au même endroit que les siens (tolérance dans le panneau) sont soudés dessus, puis les liaisons sans sommet sont réparées : frontières qui se croisent (sommet ajouté au croisement), sommet posé le long d’une frontière voisine (ajouté des deux côtés). Ctrl+Z annule.',
   'bg:vec': 'Trace un rectangle sur la zone du fond à vectoriser : chaque zone détectée devient une province. Clique une zone pour l’exclure (mer, voisins…), Maj+clic = toutes celles de la même couleur.',
   'bg:bgmove': 'Choisis un fond dans le panneau, glisse-le pour le déplacer ; poignées dans les coins = redimensionner (ratio conservé ; Maj enfoncé au départ = étirer librement, utile pour une carte en projection différente).',
   'prov:vertex': 'Glisse un sommet (les voisines suivent) ; lâche-le sur un autre sommet (cercle rouge) pour les fusionner. Clique une arête de la province sélectionnée pour ajouter un sommet. Clic droit sur un sommet = supprime.',
