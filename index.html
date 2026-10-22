@@ -463,13 +463,27 @@ let W = 0, H = 0, dpr = 1, needDraw = false;
 /* need(true) = seule la caméra a bougé : pendant un déplacement/zoom on réutilise l'image
    de la dernière vue complète (fluide même avec 500 000 sommets), puis on redessine au repos. */
 let sceneDirty = true, wheelUntil = 0, idleT = 0, snap = null, snapCam = null;
+/* Défilement infini (option, comme dans le jeu) : la carte est dessinée en plusieurs exemplaires côte à côte (tous les
+   360°) et les clics sont ramenés dans [-180°, 180°[ : tous les outils marchent sur n'importe quel exemplaire. */
+let wrapOn = false;
+try { wrapOn = localStorage.getItem('bopvec.wrap') === '1'; } catch (_) { /* stockage indisponible */ }
+const wrapX = x => ((x + 180) % 360 + 360) % 360 - 180;
+function setWrap(on) {
+  wrapOn = on;
+  try { localStorage.setItem('bopvec.wrap', on ? '1' : '0'); } catch (_) { /* stockage indisponible */ }
+  if (on) S.cam.x = wrapX(S.cam.x);
+  toast(on ? 'Défilement infini activé (gauche ↔ droite)' : 'Défilement infini désactivé'); need();
+}
+// point suivant d'un tracé (découpe, polygone) : l'exemplaire de la carte le plus proche du point précédent
+const nearX = (x, ref) => wrapOn && ref !== undefined ? x + 360 * Math.round((ref - x) / 360) : x;
 function need(camOnly) {
   if (!camOnly) sceneDirty = true;
   if (!needDraw) { needDraw = true; requestAnimationFrame(draw); }
 }
 function blitSnapshot() {
   const r = S.cam.s / snapCam.s;
-  const nx = (snapCam.x - S.cam.x) * S.cam.s + W / 2, ny = (S.cam.y - snapCam.y) * S.cam.s + H / 2;
+  let dx = snapCam.x - S.cam.x; if (wrapOn) dx -= 360 * Math.round(dx / 360);
+  const nx = dx * S.cam.s + W / 2, ny = (S.cam.y - snapCam.y) * S.cam.s + H / 2;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.fillStyle = '#0b1a2b'; ctx.fillRect(0, 0, cv.width, cv.height);
   ctx.drawImage(snap, (nx - W / 2 * r) * dpr, (ny - H / 2 * r) * dpr, W * r * dpr, H * r * dpr);
@@ -482,7 +496,7 @@ function resize() {
   cv.width = Math.max(1, Math.round(W * dpr)); cv.height = Math.max(1, Math.round(H * dpr));
   need();
 }
-const s2w = (px, py) => [(px - W / 2) / S.cam.s + S.cam.x, S.cam.y - (py - H / 2) / S.cam.s];
+const s2w = (px, py) => { const x = (px - W / 2) / S.cam.s + S.cam.x; return [wrapOn ? wrapX(x) : x, S.cam.y - (py - H / 2) / S.cam.s]; };
 const w2s = (x, y) => [(x - S.cam.x) * S.cam.s + W / 2, (S.cam.y - y) * S.cam.s + H / 2];
 
 function provFill(p) {
@@ -499,8 +513,9 @@ function provFill(p) {
 function renderScene(c, w, h, cam, opts) {
   const s = cam.s;
   c.setTransform(1, 0, 0, 1, 0, 0);
-  c.fillStyle = '#0b1a2b'; c.fillRect(0, 0, w * opts.k, h * opts.k);
+  if (!opts.noClear) { c.fillStyle = '#0b1a2b'; c.fillRect(0, 0, w * opts.k, h * opts.k); }
   c.setTransform(opts.k * s, 0, 0, -opts.k * s, opts.k * (w / 2 - cam.x * s), opts.k * (h / 2 + cam.y * s));
+  if (opts.clip) { c.save(); c.beginPath(); c.rect(-180, -1000, 360, 2000); c.clip(); }   // défilement infini : un exemplaire = 360°
   const x0 = cam.x - w / 2 / s, x1 = cam.x + w / 2 / s, y0 = cam.y - h / 2 / s, y1 = cam.y + h / 2 / s;
   const vp = [x0, y0, x1, y1];
   const view = opts.view;
@@ -546,12 +561,20 @@ function draw() {
   const moving = (act && act.kind === 'pan') || gesture || performance.now() < wheelUntil;
   if (moving && !sceneDirty && snap && snap.width === cv.width && snap.height === cv.height) { blitSnapshot(); return; }
   sceneDirty = false;
+  if (!wrapOn) { drawScene(true, true); return; }
+  S.cam.x = wrapX(S.cam.x);
+  const cx0 = S.cam.x, hw = W / 2 / S.cam.s, ks = [];
+  for (let k = -3; k <= 3; k++) if (360 * k - 180 < cx0 + hw && 360 * k + 180 > cx0 - hw) ks.push(k);
+  try { ks.forEach((k, i) => { S.cam.x = cx0 - 360 * k; drawScene(i === 0, i === ks.length - 1); }); }
+  finally { S.cam.x = cx0; }
+}
+function drawScene(first, last) {
   const dragging = act && act.kind === 'vdrag';
   if (!dragging) {
     if (G.geomDirty) rebuildEdges();
     if (G.asgnDirty) rebuildBorders();
   }
-  const { vis, s } = renderScene(ctx, W, H, S.cam, { k: dpr, view: S.view, overlay: S.overlayCountry, bg: true, alpha: S.provAlpha });
+  const { vis, s } = renderScene(ctx, W, H, S.cam, { k: dpr, view: S.view, overlay: S.overlayCountry, bg: true, alpha: S.provAlpha, noClear: !first, clip: wrapOn });
   const px = 1 / s;
   ctx.lineJoin = 'round';
   vecDraw(ctx, px);
@@ -610,6 +633,7 @@ function draw() {
     ctx.fill(); ctx.stroke();
   }
 
+  if (wrapOn) ctx.restore();   // fin du découpage de l'exemplaire (renderScene)
   // couche écran : noms, sommets
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   if (pdraw.pts.length) {
@@ -663,6 +687,7 @@ function draw() {
   }
 
   // instantané de la vue complète (réutilisé pendant les déplacements/zooms)
+  if (!last) return;
   if (!snap) snap = document.createElement('canvas');
   if (snap.width !== cv.width || snap.height !== cv.height) { snap.width = cv.width; snap.height = cv.height; }
   snap.getContext('2d').drawImage(cv, 0, 0);
@@ -796,7 +821,7 @@ function cutMove(px, py, wx, wy) {
   if (cut.free) {
     const n = cut.free.length;
     const [lx, ly] = w2s(cut.free[n - 2], cut.free[n - 1]);
-    if (Math.hypot(px - lx, py - ly) > 2.5) cut.free.push(wx, wy);
+    if (Math.hypot(px - lx, py - ly) > 2.5) cut.free.push(nearX(wx, cut.free[cut.free.length - 2]), wy);
   }
   cut.hover = [wx, wy];
   need();
@@ -825,7 +850,7 @@ function rdpFlat(a, tol) {
 }
 function cutUp(px, py, wx, wy) {
   if (cut.free) {
-    cut.free.push(wx, wy);
+    cut.free.push(nearX(wx, cut.free[cut.free.length - 2]), wy);
     // tracé libre : on le simplifie (tolérance 2 px d'écran) pour ne pas semer des centaines de sommets
     const [ox, oy] = s2w(0, 0), [tx_, ty_] = s2w(2, 0);
     cut.free = rdpFlat(cut.free, Math.hypot(tx_ - ox, ty_ - oy));
@@ -838,7 +863,7 @@ function cutUp(px, py, wx, wy) {
       const [lx, ly] = w2s(cut.pts[n - 2], cut.pts[n - 1]);
       if (Math.hypot(px - lx, py - ly) < 10) { const line = cut.pts.slice(); cutReset(); applyCut(line); return; }
     }
-    cut.pts.push(wx, wy);
+    cut.pts.push(nearX(wx, cut.pts[cut.pts.length - 2]), wy);
   }
   cut.down = null; need();
 }
@@ -970,7 +995,7 @@ function polyDown(px, py, wx, wy, right) {
     const [lx, ly] = w2s(pdraw.pts[n - 2], pdraw.pts[n - 1]);
     if (Math.hypot(px - lx, py - ly) < 6) { if (n >= 6) polyFinish(); return; } // double-clic
   }
-  pdraw.pts.push(wx, wy); need();
+  pdraw.pts.push(nearX(wx, pdraw.pts[pdraw.pts.length - 2]), wy); need();
 }
 
 function polyFinish() {
@@ -2561,6 +2586,7 @@ window.addEventListener('keydown', e => {
   if (k === 'escape') { cutReset(); if (strait.a) { strait.a = null; need(); } if (act) abortAct(); return; }
   if (k === 'enter') { if (S.tool === 'poly') polyFinish(); else cutFinish(); return; }
   if (k === 'l') { S.labels = !S.labels; need(); return; }
+  if (k === 'o') { setWrap(!wrapOn); return; }
   if (k === '/') { e.preventDefault(); $('#search').focus(); return; }
   if (k === 'delete' || k === 'backspace') { if (S.view === 'prov') { if (S.tool === 'strait') straitDelete(); else deleteSel(); } return; }
   if (['1', '2', '3', '4', '5', '6', '7'].includes(k)) { setView(['prov', 'country', 'region', 'terrain', 'bg', 'air', 'naval'][+k - 1]); return; }
@@ -2768,6 +2794,7 @@ function renderMenu() {
     <button id="mNEAdd">Compléter avec Natural Earth (terres manquantes)</button>
     <button id="mCloud">☁ Cloud GitHub (sauvegarde partout)</button>
     <label><input type="checkbox" id="mLab" ${S.labels ? 'checked' : ''}> Noms sur la carte (L)</label>
+    <label><input type="checkbox" id="mWrap" ${wrapOn ? 'checked' : ''}> Défilement infini gauche ↔ droite (O)</label>
     <div class="kv" style="margin:0 6px">Raccourcis : 1-7 vues · V C M D H outils · Espace = déplacer · F tout voir · Ctrl+Z / Y</div>`;
   $('#mSave').onclick = () => { saveNow(); $('#menu').hidden = true; };
   $('#mFile').onclick = () => { download(S.name.replace(/[^\w\-]+/g, '_') + '.bopvec', new Blob([JSON.stringify(serialize())], { type: 'application/json' })); $('#menu').hidden = true; };
@@ -2777,6 +2804,7 @@ function renderMenu() {
   $('#mNEAdd').onclick = () => { $('#menu').hidden = true; completeWithNE(); };
   $('#mCloud').onclick = () => { $('#menu').hidden = true; showCloud(); };
   $('#mLab').onchange = e => { S.labels = e.target.checked; need(); };
+  $('#mWrap').onchange = e => setWrap(e.target.checked);
 }
 $('#bMenu').onclick = () => { const m = $('#menu'); m.hidden = !m.hidden; if (!m.hidden) renderMenu(); };
 $('#bUndo').onclick = undo; $('#bRedo').onclick = redo; $('#bFit').onclick = fitView;
